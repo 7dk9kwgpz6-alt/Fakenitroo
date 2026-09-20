@@ -1,0 +1,7 @@
+{
+  "name": "ProfileForge",
+  "description": "Local-only profile customizer: profile effects, avatar decorations, nameplates, theme colors and badges, all set from the plugin settings. No server.",
+  "authors": [{ "name": "you", "id": "0" }],
+  "main": "index.js",
+  "hash": "0.1.0"
+}
