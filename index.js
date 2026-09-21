@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.1.0";
+  var VERSION = "0.1.1";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -19,6 +19,8 @@
   var UserStore = null;
   var UserProfileStore = null;
   var restApi = null;
+  var notes = [];
+  var catalogInfo = "";
 
   var DEFAULTS = {
     enabled: true,
@@ -40,16 +42,17 @@
   };
 
   // Staff, Partner and Certified Moderator are left out on purpose: those get used to fool people in screenshots.
+  // [label, flag bit, badge id, description, icon hash]. The Brilliance hash was read from a real profile; the rest are from memory.
   var BADGES = [
-    ["HypeSquad Events", 4],
-    ["Bug Hunter Level 1", 8],
-    ["HypeSquad Bravery", 64],
-    ["HypeSquad Brilliance", 128],
-    ["HypeSquad Balance", 256],
-    ["Early Supporter", 512],
-    ["Bug Hunter Level 2", 16384],
-    ["Early Verified Bot Developer", 131072],
-    ["Active Developer", 4194304]
+    ["HypeSquad Events", 4, "hypesquad", "HypeSquad Events", "bf01d1073931f921909045f3a39fd264"],
+    ["Bug Hunter Level 1", 8, "bug_hunter_level_1", "Discord Bug Hunter", "2717692c7dca7289b35297368a940dd0"],
+    ["HypeSquad Bravery", 64, "hypesquad_house_1", "HypeSquad Bravery", "8a88d63823d8a71cd5e390baa45efa02"],
+    ["HypeSquad Brilliance", 128, "hypesquad_house_2", "HypeSquad Brilliance", "011940fd013da3f7fb926e4a1cd2e618"],
+    ["HypeSquad Balance", 256, "hypesquad_house_3", "HypeSquad Balance", "3aa41de486fa12454c3761e8e223442e"],
+    ["Early Supporter", 512, "premium_early_supporter", "Early Supporter", "7060786766c9c840eb3019e725d2b358"],
+    ["Bug Hunter Level 2", 16384, "bug_hunter_level_2", "Discord Bug Hunter", "848f79194d4be5ff5f81505cbd0ce1e6"],
+    ["Early Verified Bot Developer", 131072, "verified_developer", "Early Verified Bot Developer", "6df5892e37d4bad8cb1e2bd6acc0b4cb"],
+    ["Active Developer", 4194304, "active_developer", "Active Developer", "6bdc42827a38498929a4920da12695d9"]
   ];
 
   var has = Object.prototype.hasOwnProperty;
@@ -63,6 +66,11 @@
 
   function toast(msg) {
     try { V.ui.toasts.showToast(msg); } catch (_) {}
+  }
+
+  function note(msg) {
+    if (notes.indexOf(msg) === -1) notes.push(msg);
+    if (notes.length > 25) notes.shift();
   }
 
   function ensureDefaults() {
@@ -98,12 +106,21 @@
     return bk && has.call(bk, key) ? bk[key].v : obj[key];
   }
 
+  // Some profile fields have setters that silently ignore writes, so verify and redefine if needed.
+  function forceSet(obj, key, value) {
+    obj[key] = value;
+    if (obj[key] !== value) {
+      Object.defineProperty(obj, key, { value: value, writable: true, configurable: true, enumerable: true });
+      note("redefined " + key);
+    }
+  }
+
   function setField(obj, key, value, active) {
     try {
       if (active) {
         var bk = backupFor(obj);
         if (!has.call(bk, key)) bk[key] = { v: obj[key], had: key in obj };
-        obj[key] = value;
+        forceSet(obj, key, value);
       } else {
         var b = backups.get(obj);
         if (b && has.call(b, key)) {
@@ -124,9 +141,9 @@
     backups.delete(obj);
   }
 
-  function withPlate(orig) {
+  function withPlate(orig, slot) {
     var sig = [storage.plateAsset, storage.plateSkuId, storage.plateLabel, storage.plateName, storage.platePalette].join("|");
-    return memo("plate", sig, orig, function () {
+    return memo(slot, sig, orig, function () {
       var base = {};
       if (orig && typeof orig === "object") { for (var k in orig) base[k] = orig[k]; }
       base.nameplate = {
@@ -137,6 +154,19 @@
         palette: storage.platePalette || ""
       };
       return base;
+    });
+  }
+
+  function badgesFor(orig) {
+    var bits = Number(storage.badgeFlags) || 0;
+    return memo("badges", String(bits), orig, function () {
+      var out = Array.isArray(orig) ? orig.slice() : [];
+      var seen = {};
+      out.forEach(function (b) { if (b && b.id) seen[b.id] = true; });
+      BADGES.forEach(function (b) {
+        if ((bits & b[1]) !== 0 && !seen[b[2]]) out.push({ id: b[2], description: b[3], icon: b[4] });
+      });
+      return out;
     });
   }
 
@@ -152,7 +182,7 @@
     setField(u, "avatarDecorationData", memo("deco", storage.decoAsset + "|" + storage.decoSkuId, null, function () {
       return { asset: storage.decoAsset, skuId: storage.decoSkuId || undefined, expiresAt: null };
     }), on && !!storage.decoAsset);
-    setField(u, "collectibles", withPlate(origOf(u, "collectibles")), on && !!storage.plateAsset);
+    setField(u, "collectibles", withPlate(origOf(u, "collectibles"), "userPlate"), on && !!storage.plateAsset);
     setField(u, "accentColor", primary, on && primary !== null);
     return u;
   }
@@ -163,15 +193,20 @@
     var primary = hexToInt(storage.primaryColor);
     var accent = hexToInt(storage.accentColor);
     if (accent === null) accent = primary;
+    var bits = on ? (Number(storage.badgeFlags) || 0) : 0;
     var theme = on && primary !== null;
     var effect = on && !!storage.effectId;
     var deco = on && !!storage.decoAsset;
+    var plate = on && !!storage.plateAsset;
 
     setField(p, "themeColors", memo("theme", primary + "|" + accent, null, function () { return [primary, accent]; }), theme);
+    setField(p, "profileEffectID", storage.effectId, effect);
     setField(p, "profileEffectId", storage.effectId, effect);
     setField(p, "profileEffect", memo("effect", storage.effectId + "|" + storage.effectSkuId, null, function () {
       return { id: storage.effectId, skuId: storage.effectSkuId || storage.effectId, expiresAt: null };
     }), effect);
+    setField(p, "collectibles", withPlate(origOf(p, "collectibles"), "profilePlate"), plate);
+    setField(p, "badges", badgesFor(origOf(p, "badges")), bits !== 0);
     setField(p, "premiumType", 2, on && (theme || effect || deco || !!storage.spoofNitro));
     return p;
   }
@@ -232,48 +267,57 @@
     return fn().then(function (v) { cache[name] = v; return v; });
   }
 
-  function loadEffects() {
-    return cached("effects", function () {
-      return api("/user-profile-effects").then(function (body) {
-        var list = (body && body.profile_effect_configs) || [];
-        return list.map(function (e) {
-          return { name: e.title || String(e.id), id: String(e.id), skuId: String(e.sku_id || e.id), thumb: e.thumbnail_preview_src };
-        });
-      });
-    });
-  }
-
   function loadCollectibles() {
     return cached("collectibles", function () {
       return api("/collectibles-categories").then(function (body) {
         var cats = Array.isArray(body) ? body : ((body && body.categories) || []);
         var decos = [];
         var plates = [];
+        var noAsset = [];
+        var typeCounts = {};
+        var sample = null;
         cats.forEach(function (c) {
           (c.products || []).forEach(function (p) {
             (p.items || []).forEach(function (it) {
-              if (!it || !it.asset) return;
-              var name = p.name || c.name || String(it.asset);
+              if (!it) return;
+              var t = String(it.type);
+              typeCounts[t] = (typeCounts[t] || 0) + 1;
+              var name = p.name || c.name || String(it.asset || it.id || "item");
               var sku = String(it.sku_id || p.sku_id || "");
-              if (it.palette || /nameplate/i.test(String(it.asset))) {
+              if (it.asset && (it.palette || /nameplate/i.test(String(it.asset)))) {
                 plates.push({
                   name: name, asset: it.asset, skuId: sku, label: it.label || name, palette: it.palette || "",
                   thumb: "https://cdn.discordapp.com/assets/collectibles/" + it.asset + "static.png"
                 });
-              } else {
+              } else if (it.asset) {
                 decos.push({
                   name: name, asset: it.asset, skuId: sku,
                   thumb: "https://cdn.discordapp.com/avatar-decoration-presets/" + it.asset + ".png?size=96&passthrough=false"
                 });
+              } else if (it.id) {
+                if (!sample) sample = it;
+                noAsset.push({ type: it.type, item: { name: name, id: String(it.id), skuId: sku } });
               }
             });
           });
         });
-        return { decos: decos, plates: plates };
+        var effects = noAsset.filter(function (x) { return x.type === 1; });
+        if (!effects.length) effects = noAsset;
+        var seen = {};
+        effects = effects.map(function (x) { return x.item; }).filter(function (e) {
+          if (seen[e.id]) return false;
+          seen[e.id] = true;
+          return true;
+        });
+        catalogInfo = "categories=" + cats.length + " decos=" + decos.length + " plates=" + plates.length +
+          " effects=" + effects.length + " itemTypes=" + json(typeCounts) +
+          " sampleNoAssetItemKeys=" + (sample ? Object.keys(sample).join(",") : "none");
+        return { decos: decos, plates: plates, effects: effects };
       });
     });
   }
 
+  function loadEffects() { return loadCollectibles().then(function (r) { return r.effects; }); }
   function loadDecos() { return loadCollectibles().then(function (r) { return r.decos; }); }
   function loadPlates() { return loadCollectibles().then(function (r) { return r.plates; }); }
 
@@ -315,11 +359,15 @@
         add("profile keys", Object.keys(p).join(","));
         add("profile.premiumType", p.premiumType);
         add("profile.themeColors", json(p.themeColors));
-        add("profile.profileEffectId", json(p.profileEffectId));
+        add("profile.profileEffectID", json(p.profileEffectID));
         add("profile.profileEffect", json(p.profileEffect));
+        add("profile.collectibles", json(p.collectibles));
+        add("profile.profileFrame", json(p.profileFrame));
         add("profile.badges", json(p.badges));
       } else add("profile", "not loaded yet (open your own profile once, then run this again)");
     } catch (e2) { add("profile read", e2 && e2.message); }
+    add("notes", notes.length ? "\n  " + notes.join("\n  ") : "none");
+    add("catalog", catalogInfo || "not loaded (tap a Browse button first, then run this again)");
     add("errors", errors.length ? "\n  " + errors.join("\n  ") : "none");
     return out.join("\n");
   }
