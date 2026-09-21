@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.3.2";
+  var VERSION = "0.3.3";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -23,6 +23,8 @@
   var extVer = 0;
   var hooks = { avatar: [], banner: [] };
   var active = false;
+  var imageHooked = false;
+  var bannerSwaps = 0;
   var notes = [];
   var catalogInfo = "";
 
@@ -319,6 +321,8 @@
     return false;
   }
 
+  function bannerReady() { return hooks.banner.length > 0 || imageHooked; }
+
   function kindOf(name) { return /Banner/.test(name) ? "banner" : "avatar"; }
 
   // name: the Discord function being hooked; self: the User instance for instance methods
@@ -349,7 +353,7 @@
     setField(u, "displayNameStyles", ns, !!ns);
     setField(u, "display_name_styles", ns, !!ns);
     setField(u, "globalName", String(storage.fakeName || ""), on && !!storage.fakeName);
-    setField(u, "banner", "a_profileforge", on && hooks.banner.length > 0 && !!customUrl("banner"));
+    setField(u, "banner", "a_profileforge", on && bannerReady() && !!customUrl("banner"));
     return u;
   }
 
@@ -375,7 +379,7 @@
     setField(p, "collectibles", withPlate(origOf(p, "collectibles"), "profilePlate"), plate);
     setField(p, "badges", badgesFor(origOf(p, "badges")), hasBadges);
     setField(p, "profileFrame", frame, !!frame);
-    setField(p, "banner", "a_profileforge", on && hooks.banner.length > 0 && !!customUrl("banner"));
+    setField(p, "banner", "a_profileforge", on && bannerReady() && !!customUrl("banner"));
     setField(p, "premiumType", 2, on && (theme || effect || deco || !!frame || !!storage.spoofNitro));
     return p;
   }
@@ -433,13 +437,51 @@
     });
 
     hooks = { avatar: [], banner: [] };
+    hookedFns = [];
+    imageHooked = false;
+    bannerSwaps = 0;
     active = true;
     hookUrls();
+    hookImage();
     refresh();
   }
 
   var URL_MOD_RE = /^get(?:User|GuildMember)(?:Avatar|Banner)(?:URL|Source)$/;
   var URL_PROTO_RE = /^get(?:Avatar|Banner)(?:URL|Source)$/;
+  var BANNER_FN_RE = /^get\w*Banner\w*(?:URL|Source|Uri|Src)$/;
+  var BANNER_SKIP_RE = /Guild(?!Member)|Event|Store|Shop|Category|Collectible|Application|Sticker|Sound/;
+
+  var hookedFns = [];
+  function alreadyHooked(holder, name) {
+    for (var i = 0; i < hookedFns.length; i++) { if (hookedFns[i][0] === holder && hookedFns[i][1] === name) return true; }
+    return false;
+  }
+
+  // Last resort for banners: whatever builds the URL, the picture still reaches an <Image>, so swap it there.
+  function swapImageProps(props) {
+    if (!active || !storage.enabled || !props) return null;
+    var src = props.source;
+    var uri = src && typeof src === "object" && !Array.isArray(src) ? src.uri : null;
+    if (typeof uri !== "string" || uri.indexOf("a_profileforge") === -1) return null;
+    var url = customUrl("banner");
+    if (!url) return null;
+    bannerSwaps++;
+    var next = Object.assign({}, props);
+    next.source = Object.assign({}, src, { uri: url });
+    return next;
+  }
+
+  function hookImage() {
+    var Img = RN && RN.Image;
+    if (!Img || typeof Img !== "object" || typeof Img.render !== "function") return;
+    try {
+      unpatches.push(patcher.before("render", Img, function (args) {
+        var next = swapImageProps(args[0]);
+        return next ? [next].concat(Array.prototype.slice.call(args, 1)) : undefined;
+      }));
+      imageHooked = true;
+    } catch (e) { fail("hook image", e); }
+  }
 
   function hookUrls() {
     var mods = [];
@@ -452,11 +494,35 @@
       Object.keys(mod).forEach(function (name) {
         if (!URL_MOD_RE.test(name) || typeof mod[name] !== "function") return;
         try {
+          if (alreadyHooked(mod, name)) return;
           unpatches.push(patcher.after(name, mod, function (args, ret) { return urlOverride(kindOf(name), name, null, args, ret); }));
+          hookedFns.push([mod, name]);
           hooks[kindOf(name)].push(name);
         } catch (e) { fail("hook " + name, e); }
       });
     });
+
+    // Banner getters can live in a different module than the avatar ones, so look through everything already loaded.
+    try {
+      eachModule(function (id, ex) {
+        [ex, ex.default].forEach(function (holder) {
+          if (!holder || (typeof holder !== "object" && typeof holder !== "function")) return;
+          var keys = [];
+          try { keys = Object.keys(holder); } catch (_) {}
+          keys.forEach(function (name) {
+            if (!BANNER_FN_RE.test(name) || BANNER_SKIP_RE.test(name)) return;
+            var isFn = false;
+            try { isFn = typeof holder[name] === "function"; } catch (_) {}
+            if (!isFn || alreadyHooked(holder, name)) return;
+            try {
+              unpatches.push(patcher.after(name, holder, function (args, ret) { return urlOverride("banner", name, null, args, ret); }));
+              hookedFns.push([holder, name]);
+              hooks.banner.push(name);
+            } catch (e) { fail("hook " + name, e); }
+          });
+        });
+      });
+    } catch (e) { fail("scan banner modules", e); }
 
     // Instance methods on the User class (profile screens and member lists use these, not the module functions).
     try {
@@ -464,7 +530,7 @@
       var proto = cu ? Object.getPrototypeOf(cu) : null;
       if (proto && proto !== Object.prototype) {
         Object.getOwnPropertyNames(proto).forEach(function (name) {
-          if (!URL_PROTO_RE.test(name)) return;
+          if (!URL_PROTO_RE.test(name) && !(BANNER_FN_RE.test(name) && !BANNER_SKIP_RE.test(name))) return;
           var orig = proto[name];
           if (typeof orig !== "function") return;
           var wrapped = function () {
@@ -661,21 +727,31 @@
     return names.join(",") || "none matching";
   }
 
+  // Calls fn(id, exports) for every module that is already loaded. Returns false when the module list isn't reachable.
+  function eachModule(fn) {
+    var mods = metro.modules || (typeof globalThis !== "undefined" ? globalThis.modules : null);
+    if (!mods) return false;
+    var visit = function (id, m) {
+      var ex = null;
+      try { ex = m && m.isInitialized && m.publicModule && m.publicModule.exports; } catch (_) {}
+      if (ex && (typeof ex === "object" || typeof ex === "function")) fn(String(id), ex);
+    };
+    if (typeof Map !== "undefined" && mods instanceof Map) mods.forEach(function (m, id) { visit(id, m); });
+    else Object.keys(mods).forEach(function (id) { visit(id, mods[id]); });
+    return true;
+  }
+
   function scanExports(re, cap) {
     var out = [];
     try {
-      var mods = metro.modules || (typeof globalThis !== "undefined" ? globalThis.modules : null);
-      if (!mods) return "module list unavailable";
-      var ids = Object.keys(mods);
-      for (var i = 0; i < ids.length && out.length < cap; i++) {
-        var m = mods[ids[i]];
-        var ex = m && m.isInitialized && m.publicModule && m.publicModule.exports;
-        if (!ex) continue;
+      var ok = eachModule(function (id, ex) {
+        if (out.length >= cap) return;
         var keys = [];
         try { keys = Object.keys(ex); } catch (_) {}
         var hit = keys.filter(function (k) { return re.test(k); });
-        if (hit.length) out.push(ids[i] + ": " + hit.slice(0, 6).join(","));
-      }
+        if (hit.length) out.push(id + ": " + hit.slice(0, 6).join(","));
+      });
+      if (!ok) return "module list unavailable";
     } catch (e) { return "scan failed: " + (e && e.message); }
     return out.length ? out.join("\n  ") : "none";
   }
@@ -722,6 +798,8 @@
       add("user class avatar/banner methods", pr ? Object.getOwnPropertyNames(pr).filter(function (k) { return /avatar|banner/i.test(k); }).join(",") || "none" : "unknown");
     } catch (e3) { add("user class methods", e3 && e3.message); }
     add("avatar/banner helpers in loaded modules", "\n  " + scanExports(/^get(User|GuildMember)?(Avatar|Banner)(URL|Source)$/, 10));
+    add("banner getters in loaded modules", "\n  " + scanExports(/^get\w*Banner\w*(URL|Source|Uri|Src)$/, 12));
+    add("image fallback", imageHooked ? "on, banner swaps so far: " + bannerSwaps : "off (Image is not a plain forwardRef here)");
     add("url hooks", "avatar=[" + hooks.avatar.join(",") + "] banner=[" + hooks.banner.join(",") + "]");
     add("real samples from other cached profiles", "\n  " + harvestSamples());
     add("flux actions", "\n  " + probeFlux());
@@ -1025,7 +1103,7 @@
 
     function rerender() { bump(function (n) { return n + 1; }); }
     function hookSummary() {
-      return "avatar " + (hooks.avatar.length ? hooks.avatar.join(", ") : "none found") + " | banner " + (hooks.banner.length ? hooks.banner.join(", ") : "none found");
+      return "avatar " + (hooks.avatar.length ? hooks.avatar.join(", ") : "none found") + " | banner " + (hooks.banner.length ? hooks.banner.join(", ") : "none found") + " | image fallback " + (imageHooked ? "on" : "off");
     }
     function set(k, v) { storage[k] = v; refresh(); rerender(); }
     function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } extVer++; refresh(); rerender(); }
