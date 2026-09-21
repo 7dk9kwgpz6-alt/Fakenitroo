@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.3.0";
+  var VERSION = "0.3.2";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -20,7 +20,9 @@
   var UserProfileStore = null;
   var restApi = null;
   var GuildMemberStore = null;
+  var extVer = 0;
   var hooks = { avatar: [], banner: [] };
+  var active = false;
   var notes = [];
   var catalogInfo = "";
 
@@ -50,6 +52,8 @@
     frameJson: "",
     bannerUrl: "",
     avatarUrl: "",
+    bannerData: "",
+    avatarData: "",
     fakeName: "",
     nameStyleOn: false,
     nameEffect: 2,
@@ -60,6 +64,27 @@
     nameColor4: "",
     nameColor5: ""
   };
+
+  var GRADIENTS = [
+    ["Sunset", ["#ff512f", "#f09819"]],
+    ["Ocean", ["#2193b0", "#6dd5ed"]],
+    ["Neon", ["#ff00cc", "#3333ff"]],
+    ["Aurora", ["#00c6ff", "#7f00ff"]],
+    ["Lava", ["#f12711", "#f5af19"]],
+    ["Toxic", ["#00ff87", "#60efff"]],
+    ["Cotton Candy", ["#ff9a9e", "#a1c4fd"]],
+    ["Midnight", ["#0f2027", "#2c5364"]],
+    ["Gold", ["#f7971e", "#ffd200"]],
+    ["Ice", ["#e0eafc", "#7fb2ff"]],
+    ["Blurple", ["#5865f2", "#eb459e"]],
+    ["Grape", ["#8e2de2", "#4a00e0"]],
+    ["Rose", ["#ee9ca7", "#ffdde1"]],
+    ["Ember", ["#ff416c", "#ff4b2b"]],
+    ["Mint", ["#11998e", "#38ef7d"]],
+    ["Vaporwave", ["#ff71ce", "#01cdfe", "#05ffa1", "#b967ff", "#fffb96"]],
+    ["Rainbow", ["#ff0000", "#ffa500", "#ffff00", "#00c853", "#2979ff"]],
+    ["Candy Pop", ["#ff6ec7", "#ffb86c", "#f1fa8c", "#50fa7b", "#8be9fd"]]
+  ];
 
   // Display name styles: effect and font ids as documented for Discord's display name style object.
   var NAME_EFFECTS = [[2, "Gradient"], [7, "Prism"], [6, "Glow"], [8, "Gummy"], [1, "Solid"], [3, "Neon"], [4, "Toon"], [5, "Pop"]];
@@ -253,7 +278,7 @@
       var c = hexToInt(storage["nameColor" + i]);
       if (c !== null) cols.push(c);
     }
-    if (!cols.length) return null;
+    if (!cols.length) cols = [0x5865f2];
     var eff = Number(storage.nameEffect) || 2;
     var font = Number(storage.nameFont) || 11;
     var single = eff === 1 || eff === 3 || eff === 4 || eff === 5;
@@ -279,19 +304,31 @@
   }
 
   function customUrl(kind) {
+    var saved = String((kind === "avatar" ? storage.avatarData : storage.bannerData) || "");
+    if (/^data:image\//i.test(saved)) return saved;
     var url = String((kind === "avatar" ? storage.avatarUrl : storage.bannerUrl) || "").trim();
     return /^https?:\/\//i.test(url) ? url : "";
   }
 
-  function urlOverride(kind, args, ret) {
+  function mentionsMe(args) {
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (a === myId) return true;
+      if (a && typeof a === "object" && (a.id === myId || a.userId === myId)) return true;
+    }
+    return false;
+  }
+
+  function kindOf(name) { return /Banner/.test(name) ? "banner" : "avatar"; }
+
+  // name: the Discord function being hooked; self: the User instance for instance methods
+  function urlOverride(kind, name, self, args, ret) {
+    if (!active || !storage.enabled || !myId) return ret;
     var url = customUrl(kind);
-    if (!storage.enabled || !url || !myId) return ret;
-    var a0 = args[0];
-    var id = a0 && typeof a0 === "object" ? a0.id : a0;
-    if (String(id) !== String(myId)) return ret;
-    if (ret && typeof ret === "object" && "uri" in ret) return Object.assign({}, ret, { uri: url });
-    if (ret === undefined || ret === null || typeof ret === "string") return url;
-    return ret;
+    if (!url) return ret;
+    if (!(self && self.id === myId) && !mentionsMe(args)) return ret;
+    if (/Source$/.test(name)) return Object.assign({}, ret && typeof ret === "object" ? ret : {}, { uri: url });
+    return url;
   }
 
   function decorateUser(u) {
@@ -382,36 +419,68 @@
     });
     // Return a copy instead of editing the shared member object, so nothing leaks after the name is cleared.
     safePatch("getMember", GuildMemberStore, function (args, ret) {
-      if (!ret || !myId || args[1] !== myId || !storage.enabled || !storage.fakeName) return ret;
-      var nm = String(storage.fakeName);
-      return memo("member:" + args[0], nm, ret, function () {
+      if (!ret || !myId || args[1] !== myId || !storage.enabled) return ret;
+      var nm = storage.fakeName ? String(storage.fakeName) : "";
+      var ns = storage.nameStyleOn ? nameStyleObj() : null;
+      if (!nm && !ns) return ret;
+      return memo("member:" + args[0], nm + "|" + (ns ? JSON.stringify(ns) : ""), ret, function () {
         var c = Object.create(Object.getPrototypeOf(ret));
         Object.keys(ret).forEach(function (k) { c[k] = ret[k]; });
-        c.nick = nm;
+        if (nm) c.nick = nm;
+        if (ns) { c.displayNameStyles = ns; c.display_name_styles = ns; }
         return c;
       });
     });
 
     hooks = { avatar: [], banner: [] };
-    hookUrls("avatar", ["getUserAvatarURL", "getUserAvatarSource"]);
-    hookUrls("banner", ["getUserBannerURL", "getUserBannerSource"]);
+    active = true;
+    hookUrls();
     refresh();
   }
 
-  function hookUrls(kind, names) {
-    names.forEach(function (name) {
-      var mod = null;
-      try { mod = metro.findByProps(name); } catch (_) {}
-      if (mod && typeof mod[name] === "function") {
-        try {
-          unpatches.push(patcher.after(name, mod, function (args, ret) { return urlOverride(kind, args, ret); }));
-          hooks[kind].push(name);
-        } catch (e) { fail("hook " + name, e); }
-      }
+  var URL_MOD_RE = /^get(?:User|GuildMember)(?:Avatar|Banner)(?:URL|Source)$/;
+  var URL_PROTO_RE = /^get(?:Avatar|Banner)(?:URL|Source)$/;
+
+  function hookUrls() {
+    var mods = [];
+    ["getUserAvatarURL", "getUserAvatarSource", "getGuildMemberAvatarURL", "getGuildMemberAvatarSource", "getUserBannerURL", "getUserBannerSource", "getGuildMemberBannerURL"].forEach(function (probe) {
+      var m = null;
+      try { m = metro.findByProps(probe); } catch (_) {}
+      if (m && mods.indexOf(m) === -1) mods.push(m);
     });
+    mods.forEach(function (mod) {
+      Object.keys(mod).forEach(function (name) {
+        if (!URL_MOD_RE.test(name) || typeof mod[name] !== "function") return;
+        try {
+          unpatches.push(patcher.after(name, mod, function (args, ret) { return urlOverride(kindOf(name), name, null, args, ret); }));
+          hooks[kindOf(name)].push(name);
+        } catch (e) { fail("hook " + name, e); }
+      });
+    });
+
+    // Instance methods on the User class (profile screens and member lists use these, not the module functions).
+    try {
+      var cu = UserStore && UserStore.getCurrentUser && UserStore.getCurrentUser();
+      var proto = cu ? Object.getPrototypeOf(cu) : null;
+      if (proto && proto !== Object.prototype) {
+        Object.getOwnPropertyNames(proto).forEach(function (name) {
+          if (!URL_PROTO_RE.test(name)) return;
+          var orig = proto[name];
+          if (typeof orig !== "function") return;
+          var wrapped = function () {
+            var ret = orig.apply(this, arguments);
+            return urlOverride(kindOf(name), name, this, arguments, ret);
+          };
+          proto[name] = wrapped;
+          unpatches.push(function () { if (proto[name] === wrapped) proto[name] = orig; });
+          hooks[kindOf(name)].push("User#" + name);
+        });
+      }
+    } catch (e) { fail("hook user methods", e); }
   }
 
   function uninstall() {
+    active = false;
     unpatches.forEach(function (u) { try { u(); } catch (_) {} });
     unpatches = [];
     try { if (UserStore) restoreAll(UserStore.getCurrentUser()); } catch (_) {}
@@ -592,6 +661,25 @@
     return names.join(",") || "none matching";
   }
 
+  function scanExports(re, cap) {
+    var out = [];
+    try {
+      var mods = metro.modules || (typeof globalThis !== "undefined" ? globalThis.modules : null);
+      if (!mods) return "module list unavailable";
+      var ids = Object.keys(mods);
+      for (var i = 0; i < ids.length && out.length < cap; i++) {
+        var m = mods[ids[i]];
+        var ex = m && m.isInitialized && m.publicModule && m.publicModule.exports;
+        if (!ex) continue;
+        var keys = [];
+        try { keys = Object.keys(ex); } catch (_) {}
+        var hit = keys.filter(function (k) { return re.test(k); });
+        if (hit.length) out.push(ids[i] + ": " + hit.slice(0, 6).join(","));
+      }
+    } catch (e) { return "scan failed: " + (e && e.message); }
+    return out.length ? out.join("\n  ") : "none";
+  }
+
   function runDiagnostics() {
     var out = [];
     function add(k, v) { out.push(k + ": " + v); }
@@ -626,6 +714,14 @@
         add("profile.badges", json(p.badges));
       } else add("profile", "not loaded yet (open your own profile once, then run this again)");
     } catch (e2) { add("profile read", e2 && e2.message); }
+    add("name style we apply", storage.enabled && storage.nameStyleOn ? json(nameStyleObj()) : "off");
+    add("name style helpers in loaded modules", "\n  " + scanExports(/displayNameStyle|DisplayNameStyle|nameStyle|NameStyle/, 12));
+    try {
+      var cu2 = UserStore && UserStore.getCurrentUser && UserStore.getCurrentUser();
+      var pr = cu2 ? Object.getPrototypeOf(cu2) : null;
+      add("user class avatar/banner methods", pr ? Object.getOwnPropertyNames(pr).filter(function (k) { return /avatar|banner/i.test(k); }).join(",") || "none" : "unknown");
+    } catch (e3) { add("user class methods", e3 && e3.message); }
+    add("avatar/banner helpers in loaded modules", "\n  " + scanExports(/^get(User|GuildMember)?(Avatar|Banner)(URL|Source)$/, 10));
     add("url hooks", "avatar=[" + hooks.avatar.join(",") + "] banner=[" + hooks.banner.join(",") + "]");
     add("real samples from other cached profiles", "\n  " + harvestSamples());
     add("flux actions", "\n  " + probeFlux());
@@ -667,6 +763,8 @@
     pvBadges: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
     pvBadge: { width: 22, height: 22, marginRight: 5, marginBottom: 4 },
     pvNote: { color: C.sub, fontSize: 11, marginTop: 2 },
+    swatchRow: { flexDirection: "row", marginBottom: 4, borderRadius: 4, overflow: "hidden" },
+    swatch: { width: 14, height: 10 },
     chips: { flexDirection: "row", flexWrap: "wrap", marginTop: 6 },
     chip: { backgroundColor: C.grey, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 },
     chipOn: { backgroundColor: C.accent, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 }
@@ -674,9 +772,32 @@
 
   function toHex(n) { return "#" + ("000000" + Number(n).toString(16)).slice(-6); }
 
+  // Saves a copy of the linked image on the phone, so it keeps working after the link expires (Discord attachment links do).
+  function importImage(kind) {
+    var url = String((kind === "avatar" ? storage.avatarUrl : storage.bannerUrl) || "").trim();
+    if (!/^https?:\/\//i.test(url)) return Promise.reject(new Error("paste a link first"));
+    return fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.blob();
+    }).then(function (blob) {
+      if (blob.size > 900 * 1024) throw new Error("the image is over 900 KB");
+      return new Promise(function (resolve, reject) {
+        var fr = new FileReader();
+        fr.onload = function () { resolve(String(fr.result)); };
+        fr.onerror = function () { reject(new Error("could not read the image")); };
+        fr.readAsDataURL(blob);
+      });
+    }).then(function (data) {
+      var ext = (url.split("?")[0].match(/\.(gif|png|jpe?g|webp)$/i) || [0, "png"])[1].toLowerCase().replace("jpg", "jpeg");
+      if (!/^data:image\//i.test(data)) data = data.replace(/^data:[^,]*,/, "data:image/" + ext + ";base64,");
+      storage[kind === "avatar" ? "avatarData" : "bannerData"] = data;
+      return data.length;
+    });
+  }
+
   function exportSettings() {
     var o = {};
-    Object.keys(DEFAULTS).forEach(function (k) { o[k] = storage[k]; });
+    Object.keys(DEFAULTS).forEach(function (k) { if (!/Data$/.test(k)) o[k] = storage[k]; });
     return JSON.stringify(o);
   }
 
@@ -684,12 +805,14 @@
     var o = JSON.parse(text);
     if (!o || typeof o !== "object") throw new Error("not an object");
     var n = 0;
-    Object.keys(DEFAULTS).forEach(function (k) { if (has.call(o, k)) { storage[k] = o[k]; n++; } });
+    Object.keys(DEFAULTS).forEach(function (k) { if (!/Data$/.test(k) && has.call(o, k)) { storage[k] = o[k]; n++; } });
+    extVer++;
     return n;
   }
 
   function resetAll() {
     Object.keys(DEFAULTS).forEach(function (k) { storage[k] = DEFAULTS[k]; });
+    extVer++;
   }
 
   // Live preview of the profile you have built, drawn from your settings and your real badges.
@@ -709,17 +832,26 @@
       return !!b.icon;
     });
 
-    var banner = h(RN.View, { style: [st.pvBanner, { backgroundColor: on && primary !== null ? toHex(primary) : "#3a3c43" }] },
-      bannerUrl ? h(RN.Image, { source: { uri: bannerUrl }, style: st.pvBannerImg, resizeMode: "cover" }) : null,
-      on && primary !== null && accent !== null ? h(RN.View, { style: [st.pvStripe, { backgroundColor: toHex(accent) }] }) : null
-    );
+    var bannerKids = [];
+    if (bannerUrl) bannerKids.push(h(RN.Image, { key: "bi", source: { uri: bannerUrl }, style: st.pvBannerImg, resizeMode: "cover" }));
+    else if (on && primary !== null) {
+      gradientColors([primary, accent !== null ? accent : primary], 16).forEach(function (c, i) {
+        bannerKids.push(h(RN.View, { key: "g" + i, style: { flex: 1, backgroundColor: c } }));
+      });
+    }
+    var banner = h.apply(null, [RN.View, { style: [st.pvBanner, { backgroundColor: "#3a3c43", flexDirection: "row" }] }].concat(bannerKids));
 
     var dots = [];
     if (ns) ns.colors.forEach(function (c, i) { dots.push(h(RN.View, { key: "d" + i, style: [st.pvDot, { backgroundColor: toHex(c) }] })); });
 
-    var nameRow = h.apply(null, [RN.View, { style: { flexDirection: "row", alignItems: "center" } },
-      h(RN.Text, { style: [st.pvName, { color: ns ? toHex(ns.colors[0]) : C.text }] }, name),
-      h.apply(null, [RN.View, { style: st.pvDots }].concat(dots))
+    var bar = [];
+    if (ns) gradientColors(ns.colors, 24).forEach(function (c, i) { bar.push(h(RN.View, { key: "n" + i, style: { flex: 1, backgroundColor: c } })); });
+    var nameRow = h.apply(null, [RN.View, null,
+      h.apply(null, [RN.View, { style: { flexDirection: "row", alignItems: "center" } },
+        h(RN.Text, { style: [st.pvName, { color: ns ? toHex(ns.colors[0]) : C.text }] }, name),
+        h.apply(null, [RN.View, { style: st.pvDots }].concat(dots))
+      ]),
+      h.apply(null, [RN.View, { style: { flexDirection: "row", height: 4, borderRadius: 2, overflow: "hidden", marginTop: 3 } }].concat(bar))
     ]);
 
     var avatar = avatarUrl
@@ -748,6 +880,26 @@
         h(RN.Text, { style: st.pvNote }, on ? "Preview of what you see on this phone." : "Everything is switched off.")
       ])
     ]);
+  }
+
+  function lerpHex(a, b, t) {
+    var r = Math.round(((a >> 16) & 255) + ((((b >> 16) & 255) - ((a >> 16) & 255)) * t));
+    var g = Math.round(((a >> 8) & 255) + ((((b >> 8) & 255) - ((a >> 8) & 255)) * t));
+    var bl = Math.round((a & 255) + (((b & 255) - (a & 255)) * t));
+    return toHex((r << 16) | (g << 8) | bl);
+  }
+
+  function gradientColors(cols, n) {
+    var out = [];
+    if (!cols.length) return out;
+    for (var j = 0; j < n; j++) {
+      if (cols.length === 1) { out.push(toHex(cols[0])); continue; }
+      var pos = (j / (n - 1)) * (cols.length - 1);
+      var lo = Math.floor(pos);
+      var hi = Math.min(cols.length - 1, lo + 1);
+      out.push(lerpHex(cols[lo], cols[hi], pos - lo));
+    }
+    return out;
   }
 
   function labelOf(list, value) {
@@ -786,9 +938,21 @@
         placeholderTextColor: C.sub,
         autoCapitalize: "none",
         autoCorrect: false,
+        onChangeText: props.onLive ? function (t) { props.onLive(String(t || "").trim()); } : undefined,
         onEndEditing: function (e) { props.onSave(String((e && e.nativeEvent && e.nativeEvent.text) || "").trim()); }
       })
     );
+  }
+
+  function Presets(props) {
+    var kids = props.list.map(function (g, i) {
+      var sw = g[1].map(function (c, j) { return h(RN.View, { key: "s" + j, style: [st.swatch, { backgroundColor: c }] }); });
+      return h(RN.TouchableOpacity, { key: "p" + i, onPress: function () { props.onPick(g); }, style: [st.chip, { alignItems: "center" }] },
+        h.apply(null, [RN.View, { style: st.swatchRow }].concat(sw)),
+        h(RN.Text, { style: st.btnText }, g[0])
+      );
+    });
+    return h.apply(null, [RN.View, { style: st.chips }].concat(kids));
   }
 
   function Choices(props) {
@@ -864,7 +1028,15 @@
       return "avatar " + (hooks.avatar.length ? hooks.avatar.join(", ") : "none found") + " | banner " + (hooks.banner.length ? hooks.banner.join(", ") : "none found");
     }
     function set(k, v) { storage[k] = v; refresh(); rerender(); }
-    function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } refresh(); rerender(); }
+    function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } extVer++; refresh(); rerender(); }
+    function validHex(v) { return v === "" || hexToInt(v) !== null; }
+    function applyNamePreset(g) {
+      var eff = Number(storage.nameEffect) || 2;
+      if ([2, 6, 7, 8].indexOf(eff) < 0) eff = 2;
+      var o = { nameStyleOn: true, nameEffect: eff };
+      for (var i = 1; i <= 5; i++) o["nameColor" + i] = g[1][i - 1] || "";
+      setMany(o);
+    }
 
     var flags = Number(storage.badgeFlags) || 0;
     var idsNow = idSet();
@@ -895,46 +1067,70 @@
     ]));
 
     cards = tabs.profile;
+    cards.push(Card("Theme gradients", "Tap one to set both theme colors at once.", [
+      h(Presets, { key: "tp", list: GRADIENTS, onPick: function (g) { setMany({ primaryColor: g[1][0], accentColor: g[1][1] || g[1][0] }); } })
+    ]));
     cards.push(Card("Theme colors", "Hex like #5865f2. Accent is optional.", [
-      h(Field, { key: "pc:" + storage.primaryColor, label: "Primary color", placeholder: "#5865f2", value: storage.primaryColor, onSave: function (v) { set("primaryColor", v); } }),
-      h(Field, { key: "ac:" + storage.accentColor, label: "Accent color", placeholder: "#eb459e", value: storage.accentColor, onSave: function (v) { set("accentColor", v); } })
+      h(Field, { key: "pc:" + extVer, label: "Primary color", placeholder: "#5865f2", value: storage.primaryColor, onLive: function (v) { if (validHex(v)) set("primaryColor", v); }, onSave: function (v) { set("primaryColor", v); } }),
+      h(Field, { key: "ac:" + extVer, label: "Accent color", placeholder: "#eb459e", value: storage.accentColor, onLive: function (v) { if (validHex(v)) set("accentColor", v); }, onSave: function (v) { set("accentColor", v); } })
     ]));
 
     cards.push(Card("Profile effect", "Selected: " + (storage.effectName || storage.effectId || "none") + ". If it doesn't animate, open Discord's own Shop once (Settings), then reopen your profile.", [
       h(CatalogPicker, { key: "pe", title: "effects", load: loadEffects, onPick: function (it) { setMany({ effectId: it.id, effectSkuId: it.skuId, effectName: it.name }); } }),
       Btn("Clear effect", function () { setMany({ effectId: "", effectSkuId: "", effectName: "" }); }, true),
-      h(Field, { key: "ei:" + storage.effectId, label: "Effect ID (manual)", value: storage.effectId, onSave: function (v) { setMany({ effectId: v, effectName: "" }); } })
+      h(Field, { key: "ei:" + extVer, label: "Effect ID (manual)", value: storage.effectId, onSave: function (v) { setMany({ effectId: v, effectName: "" }); } })
     ]));
 
     cards.push(Card("Avatar decoration", "Selected: " + (storage.decoName || storage.decoAsset || "none"), [
       h(CatalogPicker, { key: "ad", title: "decorations", load: loadDecos, onPick: function (it) { setMany({ decoAsset: it.asset, decoSkuId: it.skuId, decoName: it.name }); } }),
       Btn("Clear decoration", function () { setMany({ decoAsset: "", decoSkuId: "", decoName: "" }); }, true),
-      h(Field, { key: "da:" + storage.decoAsset, label: "Decoration asset (manual)", placeholder: "a_...", value: storage.decoAsset, onSave: function (v) { setMany({ decoAsset: v, decoName: "" }); } })
+      h(Field, { key: "da:" + extVer, label: "Decoration asset (manual)", placeholder: "a_...", value: storage.decoAsset, onSave: function (v) { setMany({ decoAsset: v, decoName: "" }); } })
     ]));
 
     cards.push(Card("Nameplate", "Selected: " + (storage.plateName || storage.plateAsset || "none"), [
       h(CatalogPicker, { key: "np", title: "nameplates", load: loadPlates, onPick: function (it) { setMany({ plateAsset: it.asset, plateSkuId: it.skuId, plateLabel: it.label, platePalette: it.palette, plateName: it.name }); } }),
       Btn("Clear nameplate", function () { setMany({ plateAsset: "", plateSkuId: "", plateLabel: "", platePalette: "", plateName: "" }); }, true),
-      h(Field, { key: "pa:" + storage.plateAsset, label: "Nameplate asset (manual)", placeholder: "nameplates/nameplates/bloom/", value: storage.plateAsset, onSave: function (v) { setMany({ plateAsset: v, plateName: "" }); } }),
-      h(Field, { key: "pp:" + storage.platePalette, label: "Nameplate palette (manual)", placeholder: "cobalt", value: storage.platePalette, onSave: function (v) { set("platePalette", v); } })
+      h(Field, { key: "pa:" + extVer, label: "Nameplate asset (manual)", placeholder: "nameplates/nameplates/bloom/", value: storage.plateAsset, onSave: function (v) { setMany({ plateAsset: v, plateName: "" }); } }),
+      h(Field, { key: "pp:" + extVer, label: "Nameplate palette (manual)", placeholder: "cobalt", value: storage.platePalette, onSave: function (v) { set("platePalette", v); } })
     ]));
 
     cards.push(Card("Profile frame", "Selected: " + (storage.frameName || storage.frameSku || "none") + ". The decorative border around your profile card.", [
       h(CatalogPicker, { key: "pf", title: "frames", load: loadFrames, onPick: function (it) { setMany({ frameSku: it.id, frameName: it.name, frameJson: JSON.stringify(it.item || {}) }); } }),
       Btn("Clear frame", function () { setMany({ frameSku: "", frameName: "", frameJson: "" }); }, true),
-      h(Field, { key: "fs:" + storage.frameSku, label: "Frame SKU ID (manual)", value: storage.frameSku, onSave: function (v) { setMany({ frameSku: v, frameName: "", frameJson: "" }); } })
+      h(Field, { key: "fs:" + extVer, label: "Frame SKU ID (manual)", value: storage.frameSku, onSave: function (v) { setMany({ frameSku: v, frameName: "", frameJson: "" }); } })
     ]));
 
     cards = tabs.media;
-    cards.push(Card("Banner and avatar (GIFs)", "Paste direct links ending in .gif, .png or .jpg. Discord attachment and Imgur links work, Tenor page links don't.", [
-      h(Field, { key: "bu:" + storage.bannerUrl, label: "Banner URL", placeholder: "https://.../banner.gif", value: storage.bannerUrl, onSave: function (v) { set("bannerUrl", v); } }),
-      h(Field, { key: "au:" + storage.avatarUrl, label: "Avatar URL", placeholder: "https://.../avatar.gif", value: storage.avatarUrl, onSave: function (v) { set("avatarUrl", v); } }),
+    function saveImage(kind) {
+      toast("Saving...");
+      importImage(kind).then(function (len) {
+        extVer++; refresh(); rerender();
+        toast("Saved on this phone (" + Math.max(1, Math.round(len / 1024)) + " KB)");
+      }, function (e) {
+        toast("Could not save the image: " + (e && e.message ? e.message : e));
+      });
+    }
+    function source(kind) {
+      var saved = kind === "avatar" ? storage.avatarData : storage.bannerData;
+      return saved ? "saved on this phone" : (customUrl(kind) ? "loads from the link" : "none");
+    }
+    cards.push(Card("Banner and avatar (GIFs)", "Paste direct links ending in .gif, .png or .jpg. Imgur links work, Tenor page links don't. Discord attachment links expire, so save a copy on the phone.", [
+      h(Field, { key: "bu:" + extVer, label: "Banner URL", placeholder: "https://.../banner.gif", value: storage.bannerUrl, onSave: function (v) { setMany({ bannerUrl: v, bannerData: "" }); } }),
+      Btn("Save banner on this phone", function () { saveImage("banner"); }, true),
+      storage.bannerData ? Btn("Remove saved banner", function () { setMany({ bannerData: "" }); }, true) : null,
+      h(Field, { key: "au:" + extVer, label: "Avatar URL", placeholder: "https://.../avatar.gif", value: storage.avatarUrl, onSave: function (v) { setMany({ avatarUrl: v, avatarData: "" }); } }),
+      Btn("Save avatar on this phone", function () { saveImage("avatar"); }, true),
+      storage.avatarData ? Btn("Remove saved avatar", function () { setMany({ avatarData: "" }); }, true) : null,
+      h(RN.Text, { style: st.sub }, "Banner: " + source("banner") + "  |  Avatar: " + source("avatar")),
       h(RN.Text, { style: st.sub }, "Hooks found on this build: " + hookSummary())
     ]));
 
     cards = tabs.name;
+    cards.push(Card("Name gradients", "Tap one to color your display name. Three to five colors need Gradient, Prism, Glow or Gummy.", [
+      h(Presets, { key: "np2", list: GRADIENTS, onPick: applyNamePreset })
+    ]));
     var nameKids = [
-      h(Field, { key: "fn:" + storage.fakeName, label: "Display name (only you see it)", placeholder: "Any name you want", value: storage.fakeName, onSave: function (v) { set("fakeName", v); } }),
+      h(Field, { key: "fn:" + extVer, label: "Display name (only you see it)", placeholder: "Any name you want", value: storage.fakeName, onLive: function (v) { set("fakeName", v); }, onSave: function (v) { set("fakeName", v); } }),
       ToggleRow("Colored display name", storage.nameStyleOn, function (v) { set("nameStyleOn", v); }),
       h(RN.Text, { style: st.label }, "Effect (Gradient, Prism, Glow and Gummy take up to 5 colors)"),
       h(Choices, { options: NAME_EFFECTS, value: storage.nameEffect, onPick: function (v) { set("nameEffect", v); } }),
@@ -943,7 +1139,7 @@
     ];
     for (var ci = 1; ci <= 5; ci++) {
       (function (n) {
-        nameKids.push(h(Field, { key: "nc" + n + ":" + storage["nameColor" + n], label: "Color " + n, placeholder: "#ff66cc", value: storage["nameColor" + n], onSave: function (v) { set("nameColor" + n, v); } }));
+        nameKids.push(h(Field, { key: "nc" + n + ":" + extVer, label: "Color " + n, placeholder: "#ff66cc", value: storage["nameColor" + n], onLive: function (v) { if (validHex(v)) set("nameColor" + n, v); }, onSave: function (v) { set("nameColor" + n, v); } }));
       })(ci);
     }
     cards.push(Card("Display name", "Your name and colors on this phone only.", nameKids));
@@ -972,8 +1168,8 @@
     });
 
     cards.push(Card("Custom badge", "Any badge icon hash (32 characters), for badges not listed above.", [
-      h(Field, { key: "cbi:" + storage.customBadgeIcon, label: "Icon hash", placeholder: "32 hex characters", value: storage.customBadgeIcon, onSave: function (v) { set("customBadgeIcon", v); } }),
-      h(Field, { key: "cbd:" + storage.customBadgeDesc, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) { set("customBadgeDesc", v); } })
+      h(Field, { key: "cbi:" + extVer, label: "Icon hash", placeholder: "32 hex characters", value: storage.customBadgeIcon, onSave: function (v) { set("customBadgeIcon", v); } }),
+      h(Field, { key: "cbd:" + extVer, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) { set("customBadgeDesc", v); } })
     ]));
 
     cards = tabs.tools;
