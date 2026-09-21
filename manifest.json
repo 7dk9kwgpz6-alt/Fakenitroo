@@ -1,12 +1,15 @@
 {
   "name": "ProfileForge",
-  "description": "Local-only profile customizer with a live preview HUD: effects, decorations, nameplates, frames, badges, gradient presets, colored display names, GIF banner and avatar. No server.",
+  "description": "Client-side cosmetic profile customization with animated HUDs, themes, badges, collectibles and presets.",
   "authors": [
     {
-      "name": "you",
-      "id": "0"
+      "name": "7dk9kwgpz6-alt"
     }
   ],
   "main": "index.js",
-  "hash": "f8158dc74418b6cfd024fae022b5a64091cf63098fccd5ff1a2f0248616589dd"
+  "version": "0.5.0",
+  "vendetta": {
+    "icon": "ic_profile"
+  },
+  "hash": "profileforge-0.5.0"
 }
