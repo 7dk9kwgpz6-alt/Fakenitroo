@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.1.1";
+  var VERSION = "0.2.0";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -38,21 +38,54 @@
     plateLabel: "",
     platePalette: "",
     plateName: "",
-    badgeFlags: 0
+    badgeFlags: 0,
+    badgeIds: "",
+    customBadgeIcon: "",
+    customBadgeDesc: ""
   };
 
   // Staff, Partner and Certified Moderator are left out on purpose: those get used to fool people in screenshots.
-  // [label, flag bit, badge id, description, icon hash]. The Brilliance hash was read from a real profile; the rest are from memory.
+  // [label, flag bit (0 = not flag based), badge id, description, icon hash, group]
+  // Icon hashes come from a community table of Discord's own badge icons. Quest, Orb and Brilliance were confirmed against a real profile.
   var BADGES = [
-    ["HypeSquad Events", 4, "hypesquad", "HypeSquad Events", "bf01d1073931f921909045f3a39fd264"],
-    ["Bug Hunter Level 1", 8, "bug_hunter_level_1", "Discord Bug Hunter", "2717692c7dca7289b35297368a940dd0"],
-    ["HypeSquad Bravery", 64, "hypesquad_house_1", "HypeSquad Bravery", "8a88d63823d8a71cd5e390baa45efa02"],
-    ["HypeSquad Brilliance", 128, "hypesquad_house_2", "HypeSquad Brilliance", "011940fd013da3f7fb926e4a1cd2e618"],
-    ["HypeSquad Balance", 256, "hypesquad_house_3", "HypeSquad Balance", "3aa41de486fa12454c3761e8e223442e"],
-    ["Early Supporter", 512, "premium_early_supporter", "Early Supporter", "7060786766c9c840eb3019e725d2b358"],
-    ["Bug Hunter Level 2", 16384, "bug_hunter_level_2", "Discord Bug Hunter", "848f79194d4be5ff5f81505cbd0ce1e6"],
-    ["Early Verified Bot Developer", 131072, "verified_developer", "Early Verified Bot Developer", "6df5892e37d4bad8cb1e2bd6acc0b4cb"],
-    ["Active Developer", 4194304, "active_developer", "Active Developer", "6bdc42827a38498929a4920da12695d9"]
+    ["Discord Nitro", 0, "premium", "Discord Nitro subscriber", "2ba85e8026a8614b640c2837bcdfe21b", "nitro"],
+    ["Nitro Bronze (1 month)", 0, "premium_tenure_1_month_v2", "Nitro for 1 month: Bronze", "4f33c4a9c64ce221936bd256c356f91f", "nitro"],
+    ["Nitro Silver (3 months)", 0, "premium_tenure_3_month_v2", "Nitro for 3 months: Silver", "4514fab914bdbfb4ad2fa23df76121a6", "nitro"],
+    ["Nitro Gold (6 months)", 0, "premium_tenure_6_month_v2", "Nitro for 6 months: Gold", "2895086c18d5531d499862e41d1155a6", "nitro"],
+    ["Nitro Platinum (1 year)", 0, "premium_tenure_12_month_v2", "Nitro for 1 year: Platinum", "0334688279c8359120922938dcb1d6f8", "nitro"],
+    ["Nitro Diamond (2 years)", 0, "premium_tenure_24_month_v2", "Nitro for 2 years: Diamond", "0d61871f72bb9a33a7ae568c1fb4f20a", "nitro"],
+    ["Nitro Emerald (3 years)", 0, "premium_tenure_36_month_v2", "Nitro for 3 years: Emerald", "11e2d339068b55d3a506cff34d3780f3", "nitro"],
+    ["Nitro Ruby (5 years)", 0, "premium_tenure_60_month_v2", "Nitro for 5 years: Ruby", "cd5e2cfd9d7f27a8cdcd3e8a8d5dc9f4", "nitro"],
+    ["Nitro Opal (6+ years)", 0, "premium_tenure_72_month_v2", "Nitro for 6+ years: Opal", "5b154df19c53dce2af92c9b61e6be5e2", "nitro"],
+    ["Server Booster (1 month)", 0, "guild_booster_lvl1", "Server boosting for 1 month", "51040c70d4f20a921ad6674ff86fc95c", "boost"],
+    ["Server Booster (2 months)", 0, "guild_booster_lvl2", "Server boosting for 2 months", "0e4080d1d333bc7ad29ef6528b6f2fb7", "boost"],
+    ["Server Booster (3 months)", 0, "guild_booster_lvl3", "Server boosting for 3 months", "72bed924410c304dbe3d00a6e593ff59", "boost"],
+    ["Server Booster (6 months)", 0, "guild_booster_lvl4", "Server boosting for 6 months", "df199d2050d3ed4ebf84d64ae83989f8", "boost"],
+    ["Server Booster (9 months)", 0, "guild_booster_lvl5", "Server boosting for 9 months", "996b3e870e8a22ce519b3a50e6bdd52f", "boost"],
+    ["Server Booster (12 months)", 0, "guild_booster_lvl6", "Server boosting for 12 months", "991c9f39ee33d7537d9f408c3e53141e", "boost"],
+    ["Server Booster (15 months)", 0, "guild_booster_lvl7", "Server boosting for 15 months", "cb3ae83c15e970e8f3d410bc62cb8b99", "boost"],
+    ["Server Booster (18 months)", 0, "guild_booster_lvl8", "Server boosting for 18 months", "7142225d31238f6387d9f09efaa02759", "boost"],
+    ["Server Booster (24 months)", 0, "guild_booster_lvl9", "Server boosting for 24 months", "ec92202290b48d0879b7413d2dde3bab", "boost"],
+    ["Completed a Quest", 0, "quest_completed", "Completed a Quest", "7d9ae358c8c5e118768335dbe68b4fb8", "other"],
+    ["Orb Profile Badge", 0, "orb_profile_badge", "Collected the Orb Profile Badge", "83d8a1eb09a8d64e59233eec5d4d5c2d", "other"],
+    ["Originally known as", 0, "legacy_username", "Originally known as a previous username", "6de6d34650760ba5551a79732e98ed60", "other"],
+    ["Level 100 Reached", 0, "april_fools_2026", "Level 100 Reached", "ca105ad9cfc8580c765101d17bbb2323", "other"],
+    ["HypeSquad Events", 4, "hypesquad", "HypeSquad Events", "bf01d1073931f921909045f3a39fd264", "discord"],
+    ["Bug Hunter Level 1", 8, "bug_hunter_level_1", "Discord Bug Hunter", "2717692c7dca7289b35297368a940dd0", "discord"],
+    ["HypeSquad Bravery", 64, "hypesquad_house_1", "HypeSquad Bravery", "8a88d63823d8a71cd5e390baa45efa02", "discord"],
+    ["HypeSquad Brilliance", 128, "hypesquad_house_2", "HypeSquad Brilliance", "011940fd013da3f7fb926e4a1cd2e618", "discord"],
+    ["HypeSquad Balance", 256, "hypesquad_house_3", "HypeSquad Balance", "3aa41de486fa12454c3761e8e223442e", "discord"],
+    ["Early Supporter", 512, "premium_early_supporter", "Early Supporter", "7060786766c9c840eb3019e725d2b358", "discord"],
+    ["Bug Hunter Level 2", 16384, "bug_hunter_level_2", "Discord Bug Hunter", "848f79194d4be5ff5f81505cbd0ce1e6", "discord"],
+    ["Early Verified Bot Developer", 131072, "verified_developer", "Early Verified Bot Developer", "6df5892e0f35b051f8b61eace34f4967", "discord"],
+    ["Active Developer", 4194304, "active_developer", "Active Developer", "6bdc42827a38498929a4920da12695d9", "discord"]
+  ];
+
+  var BADGE_GROUPS = [
+    ["nitro", "Nitro badges", "The Nitro badge plus every tenure tier up to Opal."],
+    ["boost", "Server booster badges", "Boost levels from 1 to 24 months."],
+    ["other", "Quest and other badges", "Quest, Orb, legacy username and Level 100."],
+    ["discord", "Discord badges", "HypeSquad, bug hunter, early supporter and developer badges."]
   ];
 
   var has = Object.prototype.hasOwnProperty;
@@ -157,15 +190,31 @@
     });
   }
 
-  function badgesFor(orig) {
+  function idSet() {
+    var m = {};
+    String(storage.badgeIds || "").split(",").forEach(function (x) { if (x) m[x] = true; });
+    return m;
+  }
+
+  function wantedBadges() {
     var bits = Number(storage.badgeFlags) || 0;
-    return memo("badges", String(bits), orig, function () {
+    var ids = idSet();
+    var out = [];
+    BADGES.forEach(function (b) {
+      if (b[1] ? (bits & b[1]) !== 0 : !!ids[b[2]]) out.push({ id: b[2], description: b[3], icon: b[4] });
+    });
+    var icon = String(storage.customBadgeIcon || "").trim().toLowerCase();
+    if (/^[0-9a-f]{32}$/.test(icon)) out.push({ id: "profileforge_custom", description: String(storage.customBadgeDesc || "Custom badge"), icon: icon });
+    return out;
+  }
+
+  function badgesFor(orig) {
+    var sig = [storage.badgeFlags, storage.badgeIds, storage.customBadgeIcon, storage.customBadgeDesc].join("|");
+    return memo("badges", sig, orig, function () {
       var out = Array.isArray(orig) ? orig.slice() : [];
       var seen = {};
       out.forEach(function (b) { if (b && b.id) seen[b.id] = true; });
-      BADGES.forEach(function (b) {
-        if ((bits & b[1]) !== 0 && !seen[b[2]]) out.push({ id: b[2], description: b[3], icon: b[4] });
-      });
+      wantedBadges().forEach(function (b) { if (!seen[b.id]) out.push(b); });
       return out;
     });
   }
@@ -193,7 +242,7 @@
     var primary = hexToInt(storage.primaryColor);
     var accent = hexToInt(storage.accentColor);
     if (accent === null) accent = primary;
-    var bits = on ? (Number(storage.badgeFlags) || 0) : 0;
+    var hasBadges = on && wantedBadges().length > 0;
     var theme = on && primary !== null;
     var effect = on && !!storage.effectId;
     var deco = on && !!storage.decoAsset;
@@ -206,7 +255,7 @@
       return { id: storage.effectId, skuId: storage.effectSkuId || storage.effectId, expiresAt: null };
     }), effect);
     setField(p, "collectibles", withPlate(origOf(p, "collectibles"), "profilePlate"), plate);
-    setField(p, "badges", badgesFor(origOf(p, "badges")), bits !== 0);
+    setField(p, "badges", badgesFor(origOf(p, "badges")), hasBadges);
     setField(p, "premiumType", 2, on && (theme || effect || deco || !!storage.spoofNitro));
     return p;
   }
@@ -273,45 +322,54 @@
         var cats = Array.isArray(body) ? body : ((body && body.categories) || []);
         var decos = [];
         var plates = [];
-        var noAsset = [];
+        var effects = [];
+        var seen = {};
         var typeCounts = {};
         var sample = null;
-        cats.forEach(function (c) {
-          (c.products || []).forEach(function (p) {
-            (p.items || []).forEach(function (it) {
-              if (!it) return;
-              var t = String(it.type);
-              typeCounts[t] = (typeCounts[t] || 0) + 1;
-              var name = p.name || c.name || String(it.asset || it.id || "item");
-              var sku = String(it.sku_id || p.sku_id || "");
-              if (it.asset && (it.palette || /nameplate/i.test(String(it.asset)))) {
-                plates.push({
-                  name: name, asset: it.asset, skuId: sku, label: it.label || name, palette: it.palette || "",
-                  thumb: "https://cdn.discordapp.com/assets/collectibles/" + it.asset + "static.png"
-                });
-              } else if (it.asset) {
-                decos.push({
-                  name: name, asset: it.asset, skuId: sku,
-                  thumb: "https://cdn.discordapp.com/avatar-decoration-presets/" + it.asset + ".png?size=96&passthrough=false"
-                });
-              } else if (it.id) {
-                if (!sample) sample = it;
-                noAsset.push({ type: it.type, item: { name: name, id: String(it.id), skuId: sku } });
-              }
+
+        function addItem(it, name, prodSku) {
+          if (!it) return;
+          var t = String(it.type);
+          typeCounts[t] = (typeCounts[t] || 0) + 1;
+          var sku = String(it.sku_id || prodSku || "");
+          var thumbFx = it.thumbnailPreviewSrc || it.thumbnail_preview_src;
+          if (it.asset && (it.palette || /nameplate/i.test(String(it.asset)))) {
+            if (seen["p:" + it.asset]) return;
+            seen["p:" + it.asset] = true;
+            plates.push({
+              name: name, asset: it.asset, skuId: sku, label: it.label || name, palette: it.palette || "",
+              thumb: "https://cdn.discordapp.com/assets/collectibles/" + it.asset + "static.png"
             });
-          });
+          } else if (it.asset) {
+            if (seen["d:" + it.asset]) return;
+            seen["d:" + it.asset] = true;
+            decos.push({
+              name: name, asset: it.asset, skuId: sku,
+              thumb: "https://cdn.discordapp.com/avatar-decoration-presets/" + it.asset + ".png?size=96&passthrough=false"
+            });
+          } else if ((it.type === 1 || it.title || thumbFx) && (it.sku_id || it.id)) {
+            var id = String(it.sku_id || it.id);
+            if (seen["e:" + id]) return;
+            seen["e:" + id] = true;
+            if (!sample) sample = it;
+            effects.push({ name: it.title || name, id: id, skuId: id, thumb: thumbFx });
+          }
+        }
+
+        function addProduct(p, catName, depth) {
+          if (!p || depth > 3) return;
+          var name = p.name || catName || "item";
+          (p.items || []).forEach(function (it) { addItem(it, name, p.sku_id); });
+          (p.bundled_products || []).forEach(function (bp) { addProduct(bp, name, depth + 1); });
+        }
+
+        cats.forEach(function (c) {
+          (c.products || []).forEach(function (p) { addProduct(p, c.name, 0); });
         });
-        var effects = noAsset.filter(function (x) { return x.type === 1; });
-        if (!effects.length) effects = noAsset;
-        var seen = {};
-        effects = effects.map(function (x) { return x.item; }).filter(function (e) {
-          if (seen[e.id]) return false;
-          seen[e.id] = true;
-          return true;
-        });
+
         catalogInfo = "categories=" + cats.length + " decos=" + decos.length + " plates=" + plates.length +
           " effects=" + effects.length + " itemTypes=" + json(typeCounts) +
-          " sampleNoAssetItemKeys=" + (sample ? Object.keys(sample).join(",") : "none");
+          " sampleEffectKeys=" + (sample ? Object.keys(sample).join(",") : "none");
         return { decos: decos, plates: plates, effects: effects };
       });
     });
@@ -331,6 +389,35 @@
     } catch (_) {
       return "unserializable";
     }
+  }
+
+  function probeStores() {
+    var names = ["ProfileEffectStore", "ProfileEffectsStore", "CollectiblesShopStore", "CollectiblesCategoryStore", "CollectiblesStore", "AvatarDecorationStore", "NameplateStore"];
+    var lines = [];
+    names.forEach(function (n) {
+      var st_ = null;
+      try { st_ = metro.findByStoreName(n); } catch (_) {}
+      if (!st_) { lines.push(n + ": missing"); return; }
+      var proto = Object.getPrototypeOf(st_) || {};
+      var fns = Object.getOwnPropertyNames(proto).filter(function (k) {
+        var isFn = false;
+        try { isFn = typeof st_[k] === "function"; } catch (_) {}
+        return k !== "constructor" && isFn;
+      });
+      var line = n + ": found (" + fns.slice(0, 20).join(",") + ")";
+      var id = storage.effectId;
+      if (id) {
+        fns.forEach(function (k) {
+          if (/^get/.test(k) && /effect/i.test(k)) {
+            var r;
+            try { r = st_[k](id); } catch (e) { r = "threw"; }
+            line += "\n    " + k + "(effect) -> " + (r === undefined ? "undefined" : r === null ? "null" : typeof r);
+          }
+        });
+      }
+      lines.push(line);
+    });
+    return lines.join("\n  ");
   }
 
   function runDiagnostics() {
@@ -366,6 +453,7 @@
         add("profile.badges", json(p.badges));
       } else add("profile", "not loaded yet (open your own profile once, then run this again)");
     } catch (e2) { add("profile read", e2 && e2.message); }
+    add("effect stores", "\n  " + probeStores());
     add("notes", notes.length ? "\n  " + notes.join("\n  ") : "none");
     add("catalog", catalogInfo || "not loaded (tap a Browse button first, then run this again)");
     add("errors", errors.length ? "\n  " + errors.join("\n  ") : "none");
@@ -486,7 +574,18 @@
     function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } refresh(); rerender(); }
 
     var flags = Number(storage.badgeFlags) || 0;
-    function toggleBadge(bit, on) { set("badgeFlags", on ? (flags | bit) : (flags & ~bit)); }
+    var idsNow = idSet();
+    function badgeOn(b) { return b[1] ? (flags & b[1]) !== 0 : !!idsNow[b[2]]; }
+    function setBadges(list, on) {
+      var f = Number(storage.badgeFlags) || 0;
+      var m = idSet();
+      list.forEach(function (b) {
+        if (b[1]) { f = on ? (f | b[1]) : (f & ~b[1]); }
+        else if (on) { m[b[2]] = true; }
+        else { delete m[b[2]]; }
+      });
+      setMany({ badgeFlags: f, badgeIds: Object.keys(m).join(",") });
+    }
 
     var cards = [];
 
@@ -501,7 +600,7 @@
       h(Field, { key: "ac:" + storage.accentColor, label: "Accent color", placeholder: "#eb459e", value: storage.accentColor, onSave: function (v) { set("accentColor", v); } })
     ]));
 
-    cards.push(Card("Profile effect", "Selected: " + (storage.effectName || storage.effectId || "none"), [
+    cards.push(Card("Profile effect", "Selected: " + (storage.effectName || storage.effectId || "none") + ". If it doesn't animate, open Discord's own Shop once (Settings), then reopen your profile.", [
       h(CatalogPicker, { key: "pe", title: "effects", load: loadEffects, onPick: function (it) { setMany({ effectId: it.id, effectSkuId: it.skuId, effectName: it.name }); } }),
       Btn("Clear effect", function () { setMany({ effectId: "", effectSkuId: "", effectName: "" }); }, true),
       h(Field, { key: "ei:" + storage.effectId, label: "Effect ID (manual)", value: storage.effectId, onSave: function (v) { setMany({ effectId: v, effectName: "" }); } })
@@ -520,9 +619,20 @@
       h(Field, { key: "pp:" + storage.platePalette, label: "Nameplate palette (manual)", placeholder: "cobalt", value: storage.platePalette, onSave: function (v) { set("platePalette", v); } })
     ]));
 
-    cards.push(Card("Badges", "Flag-based Discord badges shown on your own profile.", BADGES.map(function (b) {
-      return ToggleRow(b[0], (flags & b[1]) !== 0, function (v) { toggleBadge(b[1], v); });
-    })));
+    BADGE_GROUPS.forEach(function (g) {
+      var list = BADGES.filter(function (b) { return b[5] === g[0]; });
+      var rows = list.map(function (b) {
+        return ToggleRow(b[0], badgeOn(b), function (v) { setBadges([b], v); });
+      });
+      rows.push(Btn("Turn all on", function () { setBadges(list, true); }, true));
+      rows.push(Btn("Turn all off", function () { setBadges(list, false); }, true));
+      cards.push(Card(g[1], g[2], rows));
+    });
+
+    cards.push(Card("Custom badge", "Any badge icon hash (32 characters), for badges not listed above.", [
+      h(Field, { key: "cbi:" + storage.customBadgeIcon, label: "Icon hash", placeholder: "32 hex characters", value: storage.customBadgeIcon, onSave: function (v) { set("customBadgeIcon", v); } }),
+      h(Field, { key: "cbd:" + storage.customBadgeDesc, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) { set("customBadgeDesc", v); } })
+    ]));
 
     var diagKids = [
       Btn("Run diagnostics", function () { setDiag(runDiagnostics()); }, true)
