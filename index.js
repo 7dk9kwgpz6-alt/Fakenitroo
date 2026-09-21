@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.3.3";
+  var VERSION = "0.4.0";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -138,6 +138,496 @@
 
   var has = Object.prototype.hasOwnProperty;
 
+  // ==========================================================================
+  // ProfileForge 0.4: presets, libraries, animated badges, HUD themes, updates
+  // ==========================================================================
+
+  var UPDATE_URL = "https://7dk9kwgpz6-alt.github.io/Fakenitroo/manifest.json";
+  // Set this to your Cloudflare Worker URL (see server/worker.js) to switch the optional user counter on.
+  // Empty means the counter does not exist at all: nothing is sent and no toggle is shown.
+  var STATS_URL = "";
+  var MAX_DATA_URL = 1300000;
+  var PRESET_DATA_MAX = 150000;
+  var MAX_USER_PRESETS = 30;
+  var MAX_LIBRARY = 40;
+
+  var EXTRA_DEFAULTS = {
+    presets: [],
+    presetIndex: 0,
+    undoLook: null,
+    theme: "glass",
+    hudAnim: true,
+    badgeFrames: "",
+    badgeFrameMs: 1200,
+    library: { banner: [], avatar: [], badge: [] },
+    checkUpdates: true,
+    telemetry: false,
+    installId: "",
+    lastPing: ""
+  };
+  for (var xk in EXTRA_DEFAULTS) {
+    if (has.call(EXTRA_DEFAULTS, xk) && !has.call(DEFAULTS, xk)) DEFAULTS[xk] = EXTRA_DEFAULTS[xk];
+  }
+
+  // ---- presets: a preset is a full "look"; applying one overwrites every key below ----
+
+  var LOOK_KEYS = [
+    "spoofNitro", "primaryColor", "accentColor",
+    "effectId", "effectSkuId", "effectName",
+    "decoAsset", "decoSkuId", "decoName",
+    "plateAsset", "plateSkuId", "plateLabel", "platePalette", "plateName",
+    "badgeFlags", "badgeIds", "customBadgeIcon", "customBadgeDesc", "hiddenBadges", "badgeFrames", "badgeFrameMs",
+    "frameSku", "frameName", "frameJson",
+    "bannerUrl", "avatarUrl", "bannerData", "avatarData",
+    "fakeName", "nameStyleOn", "nameEffect", "nameFont",
+    "nameColor1", "nameColor2", "nameColor3", "nameColor4", "nameColor5"
+  ];
+
+  var HEX32 = /^[0-9a-f]{32}$/;
+  var DATA_KEY_LIST = ["bannerData", "avatarData"];
+  var DATA_KEYS = { bannerData: 1, avatarData: 1 };
+  var URL_KEYS = { bannerUrl: 1, avatarUrl: 1 };
+  var COLOR_KEY = /^(primaryColor|accentColor|nameColor[1-5])$/;
+
+  function cleanFrames(s) {
+    return String(s || "").split(",").map(function (x) { return x.trim().toLowerCase(); })
+      .filter(function (x) { return HEX32.test(x); }).slice(0, 12).join(",");
+  }
+
+  // Everything that comes from a preset, a backup or pasted text goes through here.
+  function cleanValue(k, v) {
+    var d = DEFAULTS[k];
+    if (typeof d === "boolean") return v === true || v === "true";
+    if (typeof d === "number") {
+      var n = Number(v);
+      if (!isFinite(n)) return d;
+      return Math.max(0, Math.min(0x7fffffff, Math.floor(n)));
+    }
+    var s = v === null || v === undefined ? "" : String(v);
+    if (DATA_KEYS[k]) {
+      return s.length <= MAX_DATA_URL && /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+\/=]+$/i.test(s) ? s : "";
+    }
+    if (URL_KEYS[k]) return /^https?:\/\/[^\s]{1,1900}$/i.test(s) ? s : "";
+    if (COLOR_KEY.test(k)) return hexToInt(s) !== null ? s : "";
+    if (k === "customBadgeIcon") { s = s.trim().toLowerCase(); return HEX32.test(s) ? s : ""; }
+    if (k === "badgeFrames") return cleanFrames(s);
+    if (k === "badgeIds" || k === "hiddenBadges") return s.replace(/[^a-zA-Z0-9_,]/g, "").slice(0, 600);
+    if (k === "frameJson") {
+      if (!s || s.length > 20000) return "";
+      try { JSON.parse(s); return s; } catch (_) { return ""; }
+    }
+    return s.slice(0, 200);
+  }
+
+  function sanitizeLook(look) {
+    var src = look && typeof look === "object" ? look : {};
+    var out = {};
+    LOOK_KEYS.forEach(function (k) {
+      out[k] = has.call(src, k) ? cleanValue(k, src[k]) : DEFAULTS[k];
+    });
+    if (out.badgeFrameMs < 600) out.badgeFrameMs = 600;
+    if (out.badgeFrameMs > 10000) out.badgeFrameMs = 10000;
+    return out;
+  }
+
+  function gradColors(name) {
+    for (var i = 0; i < GRADIENTS.length; i++) if (GRADIENTS[i][0] === name) return GRADIENTS[i][1];
+    return ["#5865f2", "#eb459e"];
+  }
+
+  function mkLook(gradName, extra) {
+    var c = gradColors(gradName);
+    var look = {};
+    LOOK_KEYS.forEach(function (k) { look[k] = DEFAULTS[k]; });
+    look.primaryColor = c[0];
+    look.accentColor = c[c.length - 1];
+    look.nameStyleOn = true;
+    for (var i = 0; i < 5; i++) look["nameColor" + (i + 1)] = c[i] || "";
+    for (var k in extra) if (has.call(extra, k)) look[k] = extra[k];
+    return sanitizeLook(look);
+  }
+
+  function iconOf(id) {
+    for (var i = 0; i < BADGES.length; i++) if (BADGES[i][2] === id) return BADGES[i][4];
+    return "";
+  }
+
+  function framesOf(ids) {
+    return ids.map(iconOf).filter(function (x) { return !!x; });
+  }
+
+  var BUILTIN_PRESETS = [
+    { id: "builtin:vaporwave", name: "Vaporwave", look: mkLook("Vaporwave", { nameEffect: 7, badgeIds: "premium,premium_tenure_72_month_v2,guild_booster_lvl9" }) },
+    { id: "builtin:terminal", name: "Terminal", look: mkLook("Toxic", { nameEffect: 3, nameFont: 14, badgeFlags: 4194304 }) },
+    { id: "builtin:sunset", name: "Sunset Glow", look: mkLook("Sunset", { nameEffect: 6, badgeIds: "premium,premium_tenure_12_month_v2" }) },
+    { id: "builtin:ice", name: "Ice Glass", look: mkLook("Ice", { nameEffect: 2, nameFont: 6, badgeIds: "premium,guild_booster_lvl6" }) },
+    { id: "builtin:pop", name: "Blurple Pop", look: mkLook("Blurple", { nameEffect: 8, nameFont: 4, badgeIds: "quest_completed,orb_profile_badge" }) },
+    { id: "builtin:midnight", name: "Night Shift", look: mkLook("Midnight", { nameEffect: 1, nameFont: 12, badgeIds: "legacy_username" }) }
+  ];
+
+  // Animated badges are a flipbook: the badge icon field only takes Discord-hosted icon hashes,
+  // so "animation" means cycling through a list of hashes.
+  var BUILTIN_BADGE_ANIMS = [
+    { id: "builtin:tenure", name: "Nitro tenure cycle", frames: framesOf(["premium_tenure_1_month_v2", "premium_tenure_3_month_v2", "premium_tenure_6_month_v2", "premium_tenure_12_month_v2", "premium_tenure_24_month_v2", "premium_tenure_36_month_v2", "premium_tenure_60_month_v2", "premium_tenure_72_month_v2"]) },
+    { id: "builtin:boost", name: "Booster ladder", frames: framesOf(["guild_booster_lvl1", "guild_booster_lvl2", "guild_booster_lvl3", "guild_booster_lvl4", "guild_booster_lvl5", "guild_booster_lvl6", "guild_booster_lvl7", "guild_booster_lvl8", "guild_booster_lvl9"]) },
+    { id: "builtin:houses", name: "HypeSquad houses", frames: framesOf(["hypesquad_house_1", "hypesquad_house_2", "hypesquad_house_3"]) }
+  ];
+
+  function findAnim(id) {
+    for (var i = 0; i < BUILTIN_BADGE_ANIMS.length; i++) if (BUILTIN_BADGE_ANIMS[i].id === id) return BUILTIN_BADGE_ANIMS[i];
+    return null;
+  }
+
+  function currentAnimId() {
+    var cur = cleanFrames(storage.badgeFrames);
+    for (var i = 0; i < BUILTIN_BADGE_ANIMS.length; i++) if (BUILTIN_BADGE_ANIMS[i].frames.join(",") === cur) return BUILTIN_BADGE_ANIMS[i].id;
+    return "";
+  }
+
+  function userPresets() {
+    return Array.isArray(storage.presets) ? storage.presets : [];
+  }
+
+  function allPresets() {
+    return BUILTIN_PRESETS.concat(userPresets());
+  }
+
+  function currentPresetIndex() {
+    var n = allPresets().length;
+    var i = Math.floor(Number(storage.presetIndex) || 0);
+    return n ? Math.max(0, Math.min(n - 1, i)) : 0;
+  }
+
+  // Saved-on-phone images bigger than PRESET_DATA_MAX are left out of presets (the link is kept).
+  function snapshotLook() {
+    var look = {};
+    LOOK_KEYS.forEach(function (k) { look[k] = storage[k]; });
+    DATA_KEY_LIST.forEach(function (k) { if (String(look[k] || "").length > PRESET_DATA_MAX) look[k] = ""; });
+    return sanitizeLook(look);
+  }
+
+  function applyLook(look) {
+    var clean = sanitizeLook(look);
+    LOOK_KEYS.forEach(function (k) { storage[k] = clean[k]; });
+    startBadgeAnim();
+    refresh();
+  }
+
+  // dir: +1 next, -1 previous. Wraps at both ends. Remembers the previous look so it can be undone.
+  function presetStep(dir) {
+    var list = allPresets();
+    if (!list.length) return null;
+    var i = (currentPresetIndex() + (dir < 0 ? -1 : 1) + list.length) % list.length;
+    storage.undoLook = snapshotLook();
+    storage.presetIndex = i;
+    applyLook(list[i].look);
+    return list[i];
+  }
+
+  function undoPreset() {
+    var prev = storage.undoLook;
+    if (!prev || typeof prev !== "object") return false;
+    var now = snapshotLook();
+    applyLook(prev);
+    storage.undoLook = now;
+    return true;
+  }
+
+  function addUserPreset(name, look) {
+    var arr = userPresets();
+    if (arr.length >= MAX_USER_PRESETS) return null;
+    var p = { id: "user:" + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36), name: String(name || "My preset").slice(0, 40), look: look };
+    storage.presets = arr.concat([p]);
+    return p;
+  }
+
+  function savePreset(name) {
+    var p = addUserPreset(name, snapshotLook());
+    if (!p) { toast("Preset limit reached (" + MAX_USER_PRESETS + ")"); return null; }
+    storage.presetIndex = BUILTIN_PRESETS.length + userPresets().length - 1;
+    return p;
+  }
+
+  function renamePreset(id, name) {
+    var nm = String(name || "").trim().slice(0, 40);
+    if (!nm || String(id).indexOf("user:") !== 0) return false;
+    var hit = false;
+    storage.presets = userPresets().map(function (p) {
+      if (p.id !== id) return p;
+      hit = true;
+      return { id: p.id, name: nm, look: p.look };
+    });
+    return hit;
+  }
+
+  function deletePreset(id) {
+    if (String(id).indexOf("user:") !== 0) return false;
+    var before = userPresets();
+    var after = before.filter(function (p) { return p.id !== id; });
+    if (after.length === before.length) return false;
+    storage.presets = after;
+    storage.presetIndex = Math.min(currentPresetIndex(), allPresets().length - 1);
+    return true;
+  }
+
+  function exportPreset(p) {
+    return JSON.stringify({ profileforge: 1, name: p.name, look: p.look });
+  }
+
+  function importPreset(text) {
+    try {
+      if (typeof text !== "string" || text.length > 2600000) return { ok: false, error: "Too large" };
+      var o = JSON.parse(text);
+      if (!o || o.profileforge !== 1 || !o.look || typeof o.look !== "object") return { ok: false, error: "Not a ProfileForge preset" };
+      var p = addUserPreset(String(o.name || "Imported"), sanitizeLook(o.look));
+      return p ? { ok: true, name: p.name } : { ok: false, error: "Preset limit reached" };
+    } catch (_) {
+      return { ok: false, error: "Invalid JSON" };
+    }
+  }
+
+  // ---- libraries: saved banners, avatars and custom badges ----
+
+  function libList(kind) {
+    var l = storage.library;
+    return l && Array.isArray(l[kind]) ? l[kind] : [];
+  }
+
+  function libWrite(kind, list) {
+    storage.library = {
+      banner: kind === "banner" ? list : libList("banner"),
+      avatar: kind === "avatar" ? list : libList("avatar"),
+      badge: kind === "badge" ? list : libList("badge")
+    };
+  }
+
+  // value: image link or data URL for banner/avatar; { icon, frames, desc } for a badge
+  function libSave(kind, name, value) {
+    var list = libList(kind);
+    if (list.length >= MAX_LIBRARY) { toast("Library is full"); return false; }
+    var item = { name: String(name || "Untitled").slice(0, 40) };
+    if (kind === "badge") {
+      var frames = cleanFrames(value && value.frames);
+      var icon = cleanValue("customBadgeIcon", value && value.icon) || frames.split(",")[0] || "";
+      if (!icon) return false;
+      item.icon = icon; item.frames = frames; item.desc = String((value && value.desc) || name || "Custom badge").slice(0, 100);
+    } else {
+      var url = cleanValue(kind + "Url", value);
+      var data = cleanValue(kind + "Data", value);
+      if (data.length > PRESET_DATA_MAX) data = "";
+      if (!url && !data) return false;
+      item.value = url || data;
+    }
+    libWrite(kind, list.concat([item]));
+    return true;
+  }
+
+  function libApply(kind, i) {
+    var it = libList(kind)[i];
+    if (!it) return false;
+    if (kind === "badge") {
+      storage.customBadgeIcon = it.icon;
+      storage.badgeFrames = it.frames || "";
+      storage.customBadgeDesc = it.desc || it.name;
+      startBadgeAnim();
+    } else if (/^data:image\//i.test(it.value)) {
+      storage[kind + "Data"] = it.value;
+      storage[kind + "Url"] = "";
+    } else {
+      storage[kind + "Url"] = it.value;
+      storage[kind + "Data"] = "";
+    }
+    refresh();
+    return true;
+  }
+
+  function libRemove(kind, i) {
+    var list = libList(kind).slice();
+    if (i < 0 || i >= list.length) return false;
+    list.splice(i, 1);
+    libWrite(kind, list);
+    return true;
+  }
+
+  function applyBadgeAnim(a) {
+    if (!a || !a.frames || !a.frames.length) return;
+    storage.customBadgeIcon = a.frames[0];
+    storage.badgeFrames = a.frames.join(",");
+    storage.customBadgeDesc = a.name;
+    startBadgeAnim();
+    refreshProfile();
+  }
+
+  // ---- animated badges (flipbook) and the badge builders that replace the old ones ----
+
+  var badgeTimer = null;
+  var badgeTick = 0;
+
+  function badgeFrameList() {
+    var s = cleanFrames(storage.badgeFrames);
+    return s ? s.split(",") : [];
+  }
+
+  function refreshProfile() {
+    try { if (UserProfileStore && UserProfileStore.emitChange) UserProfileStore.emitChange(); } catch (_) {}
+  }
+
+  function stopBadgeAnim() {
+    if (badgeTimer) { clearInterval(badgeTimer); badgeTimer = null; }
+  }
+
+  // The timer only exists while the plugin is on and 2+ frames are set.
+  function startBadgeAnim() {
+    stopBadgeAnim();
+    if (!active || !storage.enabled || badgeFrameList().length < 2) return;
+    var ms = Math.max(600, Math.min(10000, Number(storage.badgeFrameMs) || 1200));
+    badgeTimer = setInterval(function () {
+      badgeTick++;
+      refreshProfile();
+    }, ms);
+  }
+
+  function wantedBadges() {
+    var bits = Number(storage.badgeFlags) || 0;
+    var ids = idSet();
+    var out = [];
+    BADGES.forEach(function (b) {
+      if (b[1] ? (bits & b[1]) !== 0 : !!ids[b[2]]) out.push({ id: b[2], description: b[3], icon: b[4] });
+    });
+    var frames = badgeFrameList();
+    var icon = frames.length ? frames[badgeTick % frames.length] : String(storage.customBadgeIcon || "").trim().toLowerCase();
+    if (HEX32.test(icon)) out.push({ id: "profileforge_custom", description: String(storage.customBadgeDesc || "Custom badge"), icon: icon });
+    return out;
+  }
+
+  function badgesFor(orig) {
+    var animated = badgeFrameList().length > 1;
+    var sig = [storage.badgeFlags, storage.badgeIds, storage.customBadgeIcon, storage.customBadgeDesc, storage.hiddenBadges, storage.badgeFrames, animated ? badgeTick : 0].join("|");
+    return memo("badges", sig, orig, function () {
+      var hidden = hiddenSet();
+      var out = (Array.isArray(orig) ? orig : []).filter(function (b) { return !(b && hidden[b.id]); });
+      var seen = {};
+      out.forEach(function (b) { if (b && b.id) seen[b.id] = true; });
+      wantedBadges().forEach(function (b) { if (!seen[b.id]) out.push(b); });
+      return out;
+    });
+  }
+
+  // ---- HUD themes ----
+  // Real background blur needs a native module Discord may not ship, so "glass" is built from
+  // translucent layers, a brighter top edge, soft borders and slowly drifting colored glows.
+
+  var MONO = (RN && RN.Platform && RN.Platform.select) ? RN.Platform.select({ ios: "Menlo", default: "monospace" }) : "monospace";
+
+  var HUD_THEMES = {
+    glass:    { name: "Glass",      bg: "#0b0d17", card: "rgba(255,255,255,0.08)", ring: "#171a2b", input: "rgba(255,255,255,0.10)", grey: "rgba(255,255,255,0.14)", border: "rgba(255,255,255,0.16)", borderTop: "rgba(255,255,255,0.34)", text: "#f5f7ff", sub: "rgba(245,247,255,0.68)", accent: "#8b9bff", accent2: "#ff8bd4", onAccent: "#0b0d17", radius: 22, mono: false, prompt: false, blobs: true },
+    terminal: { name: "Terminal",   bg: "#070b07", card: "#0c150e",                ring: "#0c150e", input: "#040804",                grey: "#12301f",                border: "#1f7a4a",                borderTop: "#2fbf75",                text: "#b8ffcf", sub: "#67b587",                accent: "#00ff87", accent2: "#60efff", onAccent: "#03130a", radius: 3,  mono: true,  prompt: true,  blobs: false },
+    nord:     { name: "Nord",       bg: "#2e3440", card: "#3b4252",                ring: "#3b4252", input: "#2b303b",                grey: "#4c566a",                border: "#4c566a",                borderTop: "#5e6a82",                text: "#eceff4", sub: "#d8dee9",                accent: "#88c0d0", accent2: "#a3be8c", onAccent: "#2e3440", radius: 8,  mono: true,  prompt: true,  blobs: false },
+    dracula:  { name: "Dracula",    bg: "#282a36", card: "#343746",                ring: "#343746", input: "#21222c",                grey: "#44475a",                border: "#6272a4",                borderTop: "#7b8bc4",                text: "#f8f8f2", sub: "#bfc3d9",                accent: "#bd93f9", accent2: "#ff79c6", onAccent: "#282a36", radius: 8,  mono: true,  prompt: true,  blobs: false },
+    gruvbox:  { name: "Gruvbox",    bg: "#282828", card: "#32302f",                ring: "#32302f", input: "#1d2021",                grey: "#504945",                border: "#504945",                borderTop: "#665c54",                text: "#ebdbb2", sub: "#a89984",                accent: "#fabd2f", accent2: "#b8bb26", onAccent: "#282828", radius: 6,  mono: true,  prompt: true,  blobs: false },
+    mocha:    { name: "Catppuccin", bg: "#1e1e2e", card: "#313244",                ring: "#313244", input: "#181825",                grey: "#45475a",                border: "#45475a",                borderTop: "#585b70",                text: "#cdd6f4", sub: "#a6adc8",                accent: "#cba6f7", accent2: "#f5c2e7", onAccent: "#1e1e2e", radius: 14, mono: false, prompt: false, blobs: false },
+    classic:  { name: "Classic",    bg: "#313338", card: "#2b2d31",                ring: "#2b2d31", input: "#1e1f22",                grey: "#4e5058",                border: "#2b2d31",                borderTop: "#2b2d31",                text: "#f2f3f5", sub: "#b5bac1",                accent: "#5865f2", accent2: "#eb459e", onAccent: "#ffffff", radius: 12, mono: false, prompt: false, blobs: false }
+  };
+
+  var HUD_THEME_LIST = Object.keys(HUD_THEMES).map(function (k) { return [k, HUD_THEMES[k].name]; });
+
+  function hudTheme() {
+    return HUD_THEMES[storage.theme] || HUD_THEMES.glass;
+  }
+
+  // ---- update check: notify only, never downloads or runs code ----
+
+  function cmpVer(a, b) {
+    var x = String(a).split(".").map(Number), y = String(b).split(".").map(Number);
+    for (var i = 0; i < 3; i++) {
+      var d = (x[i] || 0) - (y[i] || 0);
+      if (d) return d > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+
+  // cb(newVersionOrNull, error)
+  function checkUpdate(cb) {
+    try {
+      fetch(UPDATE_URL + "?t=" + Date.now()).then(function (r) { return r.json(); }).then(function (m) {
+        var v = m && typeof m.version === "string" ? m.version : "";
+        var newer = v && cmpVer(v, VERSION) > 0;
+        if (newer) toast("ProfileForge " + v + " is available. Update it from the Plugins page.");
+        if (cb) cb(newer ? v : null, null);
+      }).catch(function (e) { fail("update check", e); if (cb) cb(null, e || new Error("failed")); });
+    } catch (e) { fail("update check", e); if (cb) cb(null, e); }
+  }
+
+  // ---- optional usage counter: off by default, random install id + version only, once a day ----
+
+  function newInstallId() {
+    var s = "";
+    for (var i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
+    return s;
+  }
+
+  function statsBase() {
+    return String(STATS_URL || "").replace(/\/+$/, "");
+  }
+
+  function pingStats() {
+    if (!STATS_URL || !storage.telemetry) return;
+    var today = new Date().toISOString().slice(0, 10);
+    if (storage.lastPing === today) return;
+    if (!HEX32.test(storage.installId || "")) storage.installId = newInstallId();
+    try {
+      fetch(statsBase() + "/ping", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: storage.installId, v: VERSION }) })
+        .then(function (r) { if (r && r.ok) storage.lastPing = today; })
+        .catch(function () {});
+    } catch (_) {}
+  }
+
+  // Turning it off forgets the install id (the server entry expires by itself after 30 days).
+  function setTelemetry(on) {
+    storage.telemetry = !!on;
+    if (!on) { storage.installId = ""; storage.lastPing = ""; } else pingStats();
+  }
+
+  function fetchCount(cb) {
+    if (!STATS_URL) return cb(null);
+    try {
+      fetch(statsBase() + "/count").then(function (r) { return r.json(); })
+        .then(function (j) { cb(j && typeof j.count === "number" ? j.count : null); })
+        .catch(function () { cb(null); });
+    } catch (_) { cb(null); }
+  }
+
+  // ---- typing indicator: discovery helper ----
+  // Which component draws "x is typing" differs between Discord builds, so this lists candidates.
+
+  function discoverTyping() {
+    var found = [];
+    try {
+      eachModule(function (id, ex) {
+        [ex, ex.default].forEach(function (holder) {
+          if (!holder || (typeof holder !== "object" && typeof holder !== "function")) return;
+          var nm = "";
+          try { nm = String(holder.displayName || holder.name || ""); } catch (_) {}
+          if (nm && /typing/i.test(nm) && found.indexOf(nm) === -1) found.push(nm);
+        });
+      });
+    } catch (e) { fail("discoverTyping", e); }
+    try {
+      var ts = metro.findByStoreName("TypingStore");
+      note("TypingStore " + (ts ? "found: " + Object.keys(ts).filter(function (k) { return typeof ts[k] === "function"; }).slice(0, 12).join(", ") : "not found"));
+    } catch (e) { fail("TypingStore", e); }
+    found.slice(0, 20).forEach(function (nm) { note("typing component: " + nm); });
+    toast(found.length ? "Typing candidates: " + found.slice(0, 4).join(", ") : "No typing components found");
+    return found;
+  }
+
+  function startExtras() {
+    startBadgeAnim();
+    unpatches.push(stopBadgeAnim);
+    if (storage.checkUpdates) checkUpdate();
+    pingStats();
+  }
+
   function fail(where, e) {
     var msg = where + ": " + (e && e.message ? e.message : String(e));
     errors.push(msg);
@@ -244,34 +734,10 @@
     return m;
   }
 
-  function wantedBadges() {
-    var bits = Number(storage.badgeFlags) || 0;
-    var ids = idSet();
-    var out = [];
-    BADGES.forEach(function (b) {
-      if (b[1] ? (bits & b[1]) !== 0 : !!ids[b[2]]) out.push({ id: b[2], description: b[3], icon: b[4] });
-    });
-    var icon = String(storage.customBadgeIcon || "").trim().toLowerCase();
-    if (/^[0-9a-f]{32}$/.test(icon)) out.push({ id: "profileforge_custom", description: String(storage.customBadgeDesc || "Custom badge"), icon: icon });
-    return out;
-  }
-
   function hiddenSet() {
     var m = {};
     String(storage.hiddenBadges || "").split(",").forEach(function (x) { if (x) m[x] = true; });
     return m;
-  }
-
-  function badgesFor(orig) {
-    var sig = [storage.badgeFlags, storage.badgeIds, storage.customBadgeIcon, storage.customBadgeDesc, storage.hiddenBadges].join("|");
-    return memo("badges", sig, orig, function () {
-      var hidden = hiddenSet();
-      var out = (Array.isArray(orig) ? orig : []).filter(function (b) { return !(b && hidden[b.id]); });
-      var seen = {};
-      out.forEach(function (b) { if (b && b.id) seen[b.id] = true; });
-      wantedBadges().forEach(function (b) { if (!seen[b.id]) out.push(b); });
-      return out;
-    });
   }
 
   function nameStyleObj() {
@@ -443,6 +909,7 @@
     active = true;
     hookUrls();
     hookImage();
+    startExtras();
     refresh();
   }
 
@@ -812,41 +1279,55 @@
 
   // ---- settings UI (plain React Native, no dependency on Discord's form components) ----
 
-  var C = { card: "#2b2d31", input: "#1e1f22", text: "#f2f3f5", sub: "#b5bac1", accent: "#5865f2", grey: "#4e5058" };
-  var st = {
-    root: { padding: 12, paddingBottom: 48 },
-    card: { backgroundColor: C.card, borderRadius: 12, padding: 14, marginBottom: 12 },
-    title: { color: C.text, fontSize: 16, fontWeight: "700", marginBottom: 4 },
-    sub: { color: C.sub, fontSize: 12, marginBottom: 6 },
-    label: { color: C.sub, fontSize: 12, marginTop: 8, marginBottom: 4 },
-    input: { backgroundColor: C.input, color: C.text, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8, fontSize: 14 },
-    row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 6 },
-    rowText: { color: C.text, fontSize: 14, flexShrink: 1, paddingRight: 8 },
-    btn: { backgroundColor: C.accent, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, alignItems: "center", marginTop: 8 },
-    btn2: { backgroundColor: C.grey, borderRadius: 8, paddingVertical: 10, paddingHorizontal: 14, alignItems: "center", marginTop: 8 },
-    btnText: { color: "#ffffff", fontWeight: "600" },
-    pick: { flexDirection: "row", alignItems: "center", paddingVertical: 6 },
-    thumb: { width: 36, height: 36, marginRight: 10, borderRadius: 6 },
-    mono: { color: C.text, fontSize: 11, marginTop: 8 },
-    pv: { backgroundColor: C.card, borderRadius: 14, overflow: "hidden", marginBottom: 12 },
-    pvBanner: { height: 76, overflow: "hidden" },
-    pvBannerImg: { width: "100%", height: 76 },
-    pvStripe: { position: "absolute", left: 0, right: 0, bottom: 0, height: 5 },
-    pvBody: { paddingHorizontal: 14, paddingBottom: 14 },
-    pvAvatarRow: { flexDirection: "row", alignItems: "flex-end", marginTop: -30 },
-    pvAvatar: { width: 60, height: 60, borderRadius: 30, borderWidth: 4, borderColor: C.card, backgroundColor: C.grey },
-    pvName: { fontSize: 18, fontWeight: "700", marginTop: 8 },
-    pvDots: { flexDirection: "row", alignItems: "center", marginLeft: 8 },
-    pvDot: { width: 10, height: 10, borderRadius: 5, marginLeft: 3 },
-    pvBadges: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
-    pvBadge: { width: 22, height: 22, marginRight: 5, marginBottom: 4 },
-    pvNote: { color: C.sub, fontSize: 11, marginTop: 2 },
-    swatchRow: { flexDirection: "row", marginBottom: 4, borderRadius: 4, overflow: "hidden" },
-    swatch: { width: 14, height: 10 },
-    chips: { flexDirection: "row", flexWrap: "wrap", marginTop: 6 },
-    chip: { backgroundColor: C.grey, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 },
-    chipOn: { backgroundColor: C.accent, borderRadius: 16, paddingVertical: 6, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 }
-  };
+  var C = {};
+  var st = {};
+  var cardSeq = 0;
+
+  // Rebuilds every style from the active HUD theme. Called at the top of each Settings render.
+  function buildStyles() {
+    var t = hudTheme();
+    var ff = t.mono ? { fontFamily: MONO } : {};
+    var r = Math.min(t.radius, 12);
+    C.card = t.card; C.input = t.input; C.text = t.text; C.sub = t.sub; C.accent = t.accent; C.grey = t.grey;
+    var s = {
+      root: { padding: 12, paddingBottom: 56 },
+      card: { backgroundColor: t.card, borderColor: t.border, borderTopColor: t.borderTop, borderWidth: 1, borderRadius: t.radius, padding: 16, marginBottom: 12 },
+      title: Object.assign({ color: t.text, fontSize: 17, fontWeight: "700", letterSpacing: t.mono ? 0 : 0.2, marginBottom: 4 }, ff),
+      sub: Object.assign({ color: t.sub, fontSize: 13, lineHeight: 18, marginBottom: 6 }, ff),
+      label: Object.assign({ color: t.sub, fontSize: 12, fontWeight: "600", marginTop: 10, marginBottom: 4 }, ff),
+      input: Object.assign({ backgroundColor: t.input, color: t.text, borderColor: t.border, borderWidth: 1, borderRadius: r, paddingHorizontal: 12, paddingVertical: 9, fontSize: 14 }, ff),
+      row: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 7 },
+      rowText: Object.assign({ color: t.text, fontSize: 14, lineHeight: 20, flexShrink: 1, paddingRight: 8 }, ff),
+      btn: { backgroundColor: t.accent, borderRadius: r, paddingVertical: 11, paddingHorizontal: 14, alignItems: "center", marginTop: 8 },
+      btn2: { backgroundColor: t.grey, borderRadius: r, paddingVertical: 11, paddingHorizontal: 14, alignItems: "center", marginTop: 8 },
+      btnText: Object.assign({ color: t.onAccent, fontWeight: "700", fontSize: 14 }, ff),
+      btn2Text: Object.assign({ color: t.text, fontWeight: "600", fontSize: 14 }, ff),
+      chipText: Object.assign({ color: t.text, fontWeight: "600", fontSize: 13 }, ff),
+      chipOnText: Object.assign({ color: t.onAccent, fontWeight: "700", fontSize: 13 }, ff),
+      pick: { flexDirection: "row", alignItems: "center", paddingVertical: 6 },
+      thumb: { width: 36, height: 36, marginRight: 10, borderRadius: 6 },
+      mono: { color: t.text, fontSize: 11, marginTop: 8, fontFamily: MONO },
+      pv: { backgroundColor: t.card, borderColor: t.border, borderTopColor: t.borderTop, borderWidth: 1, borderRadius: t.radius, overflow: "hidden", marginBottom: 12 },
+      pvBanner: { height: 76, overflow: "hidden" },
+      pvBannerImg: { width: "100%", height: 76 },
+      pvStripe: { position: "absolute", left: 0, right: 0, bottom: 0, height: 5 },
+      pvBody: { paddingHorizontal: 14, paddingBottom: 14 },
+      pvAvatarRow: { flexDirection: "row", alignItems: "flex-end", marginTop: -30 },
+      pvAvatar: { width: 60, height: 60, borderRadius: 30, borderWidth: 4, borderColor: t.ring, backgroundColor: t.grey },
+      pvName: Object.assign({ fontSize: 19, fontWeight: "700", marginTop: 8 }, ff),
+      pvDots: { flexDirection: "row", alignItems: "center", marginLeft: 8 },
+      pvDot: { width: 10, height: 10, borderRadius: 5, marginLeft: 3 },
+      pvBadges: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
+      pvBadge: { width: 22, height: 22, marginRight: 5, marginBottom: 4 },
+      pvNote: Object.assign({ color: t.sub, fontSize: 12, lineHeight: 16, marginTop: 2 }, ff),
+      swatchRow: { flexDirection: "row", marginBottom: 4, borderRadius: 4, overflow: "hidden" },
+      swatch: { width: 14, height: 10 },
+      chips: { flexDirection: "row", flexWrap: "wrap", marginTop: 6 },
+      chip: { backgroundColor: t.grey, borderRadius: 16, paddingVertical: 7, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 },
+      chipOn: { backgroundColor: t.accent, borderRadius: 16, paddingVertical: 7, paddingHorizontal: 12, marginRight: 6, marginBottom: 6 }
+    };
+    for (var k in s) { if (has.call(s, k)) st[k] = s[k]; }
+  }
 
   function toHex(n) { return "#" + ("000000" + Number(n).toString(16)).slice(-6); }
 
@@ -875,21 +1356,40 @@
 
   function exportSettings() {
     var o = {};
-    Object.keys(DEFAULTS).forEach(function (k) { if (!/Data$/.test(k)) o[k] = storage[k]; });
+    Object.keys(DEFAULTS).forEach(function (k) {
+      if (/Data$/.test(k) || k === "installId" || k === "lastPing" || k === "undoLook") return;
+      o[k] = storage[k];
+    });
     return JSON.stringify(o);
   }
 
+  // Everything imported is checked value by value; the usage counter setting and install id are never imported.
   function importSettings(text) {
     var o = JSON.parse(text);
-    if (!o || typeof o !== "object") throw new Error("not an object");
+    if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("not an object");
     var n = 0;
-    Object.keys(DEFAULTS).forEach(function (k) { if (!/Data$/.test(k) && has.call(o, k)) { storage[k] = o[k]; n++; } });
+    LOOK_KEYS.forEach(function (k) {
+      if (/Data$/.test(k) || !has.call(o, k)) return;
+      storage[k] = cleanValue(k, o[k]);
+      n++;
+    });
+    if (typeof o.theme === "string" && has.call(HUD_THEMES, o.theme)) { storage.theme = o.theme; n++; }
+    ["enabled", "hudAnim", "checkUpdates"].forEach(function (k) {
+      if (typeof o[k] === "boolean") { storage[k] = o[k]; n++; }
+    });
+    if (Array.isArray(o.presets)) {
+      o.presets.slice(0, MAX_USER_PRESETS).forEach(function (p) {
+        if (p && typeof p === "object" && p.look && typeof p.look === "object" && addUserPreset(String(p.name || "Imported"), sanitizeLook(p.look))) n++;
+      });
+    }
+    startBadgeAnim();
     extVer++;
     return n;
   }
 
   function resetAll() {
     Object.keys(DEFAULTS).forEach(function (k) { storage[k] = DEFAULTS[k]; });
+    stopBadgeAnim();
     extVer++;
   }
 
@@ -917,7 +1417,7 @@
         bannerKids.push(h(RN.View, { key: "g" + i, style: { flex: 1, backgroundColor: c } }));
       });
     }
-    var banner = h.apply(null, [RN.View, { style: [st.pvBanner, { backgroundColor: "#3a3c43", flexDirection: "row" }] }].concat(bannerKids));
+    var banner = h.apply(null, [RN.View, { style: [st.pvBanner, { backgroundColor: C.grey, flexDirection: "row" }] }].concat(bannerKids));
 
     var dots = [];
     if (ns) ns.colors.forEach(function (c, i) { dots.push(h(RN.View, { key: "d" + i, style: [st.pvDot, { backgroundColor: toHex(c) }] })); });
@@ -990,13 +1490,14 @@
   }
 
   function Card(title, sub, kids) {
-    var head = [h(RN.Text, { style: st.title }, title)];
+    var t = hudTheme();
+    var head = [h(RN.Text, { style: st.title }, t.prompt ? "$ " + String(title).toLowerCase() : title)];
     if (sub) head.push(h(RN.Text, { style: st.sub }, sub));
-    return box(st.card, head.concat(kids));
+    return h(FadeIn, { key: "card:" + title, style: st.card, delay: Math.min(cardSeq++, 6) * 45, kids: head.concat(kids) });
   }
 
   function Btn(label, onPress, secondary) {
-    return h(RN.TouchableOpacity, { onPress: onPress, style: secondary ? st.btn2 : st.btn }, h(RN.Text, { style: st.btnText }, label));
+    return h(RN.TouchableOpacity, { onPress: onPress, style: secondary ? st.btn2 : st.btn }, h(RN.Text, { style: secondary ? st.btn2Text : st.btnText }, label));
   }
 
   function ToggleRow(label, value, onChange) {
@@ -1027,7 +1528,7 @@
       var sw = g[1].map(function (c, j) { return h(RN.View, { key: "s" + j, style: [st.swatch, { backgroundColor: c }] }); });
       return h(RN.TouchableOpacity, { key: "p" + i, onPress: function () { props.onPick(g); }, style: [st.chip, { alignItems: "center" }] },
         h.apply(null, [RN.View, { style: st.swatchRow }].concat(sw)),
-        h(RN.Text, { style: st.btnText }, g[0])
+        h(RN.Text, { style: st.chipText }, g[0])
       );
     });
     return h.apply(null, [RN.View, { style: st.chips }].concat(kids));
@@ -1037,7 +1538,7 @@
     var kids = props.options.map(function (o) {
       var on = String(props.value) === String(o[0]);
       return h(RN.TouchableOpacity, { key: "c" + o[0], onPress: function () { props.onPick(o[0]); }, style: on ? st.chipOn : st.chip },
-        h(RN.Text, { style: st.btnText }, o[1]));
+        h(RN.Text, { style: on ? st.chipOnText : st.chipText }, o[1]));
     });
     return h.apply(null, [RN.View, { style: st.chips }].concat(kids));
   }
@@ -1088,7 +1589,155 @@
     return h.apply(null, [RN.View, null].concat(kids));
   }
 
+  // ---- themed HUD pieces (0.4) ----
+
+  function timing(v, to, ms) {
+    return RN.Animated.timing(v, { toValue: to, duration: ms, useNativeDriver: true });
+  }
+
+  // Card body that fades and slides up when it first appears. Cards get a key from their title, so switching tabs replays it.
+  function FadeIn(props) {
+    var ref = React.useRef(null);
+    if (!ref.current) ref.current = new RN.Animated.Value(storage.hudAnim ? 0 : 1);
+    var v = ref.current;
+    React.useEffect(function () {
+      if (!storage.hudAnim) return undefined;
+      var a = RN.Animated.timing(v, { toValue: 1, duration: 320, delay: props.delay || 0, useNativeDriver: true });
+      a.start();
+      return function () { try { a.stop(); } catch (_) {} };
+    }, []);
+    var style = [props.style, { opacity: v, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }];
+    return h.apply(null, [RN.Animated.View, { style: style }].concat(props.kids || []));
+  }
+
+  // Two big soft colored circles behind the settings screen; they drift slowly. This is what the glass cards sit on.
+  function Blobs() {
+    var t = hudTheme();
+    var ref = React.useRef(null);
+    if (!ref.current) ref.current = new RN.Animated.Value(0);
+    var v = ref.current;
+    var animate = !!(t.blobs && storage.hudAnim);
+    React.useEffect(function () {
+      if (!animate) return undefined;
+      var loop = RN.Animated.loop(RN.Animated.sequence([timing(v, 1, 7000), timing(v, 0, 7000)]));
+      loop.start();
+      return function () { try { loop.stop(); } catch (_) {} };
+    }, [animate]);
+    if (!t.blobs) return null;
+    return h(RN.View, { pointerEvents: "none", style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflow: "hidden" } },
+      h(RN.Animated.View, { style: { position: "absolute", top: -90, right: -110, width: 320, height: 320, borderRadius: 160, backgroundColor: t.accent, opacity: 0.22, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, 44] }) }] } }),
+      h(RN.Animated.View, { style: { position: "absolute", bottom: -120, left: -120, width: 340, height: 340, borderRadius: 170, backgroundColor: t.accent2, opacity: 0.18, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, -44] }) }] } }));
+  }
+
+  // The live preview with arrows on both sides. Tapping an arrow slides the card out, applies the next preset, slides the new one in.
+  function PresetStage(props) {
+    var t = hudTheme();
+    var list = allPresets();
+    var idx = currentPresetIndex();
+    var cur = list[idx];
+    var slideRef = React.useRef(null);
+    var fadeRef = React.useRef(null);
+    var busy = React.useRef(false);
+    if (!slideRef.current) slideRef.current = new RN.Animated.Value(0);
+    if (!fadeRef.current) fadeRef.current = new RN.Animated.Value(1);
+    var slide = slideRef.current;
+    var fade = fadeRef.current;
+
+    function step(dir) {
+      var p = presetStep(dir);
+      extVer++;
+      if (p) toast(p.name);
+      props.onChange();
+    }
+
+    function go(dir) {
+      if (busy.current) return;
+      if (!storage.hudAnim) { step(dir); return; }
+      busy.current = true;
+      var out = -dir * 30;
+      RN.Animated.parallel([timing(fade, 0, 110), timing(slide, out, 110)]).start(function () {
+        step(dir);
+        slide.setValue(-out);
+        RN.Animated.parallel([timing(fade, 1, 200), timing(slide, 0, 200)]).start(function () { busy.current = false; });
+      });
+    }
+
+    function arrow(dir, glyph) {
+      return h(RN.TouchableOpacity, { key: "arrow" + dir, onPress: function () { go(dir); }, hitSlop: { top: 14, bottom: 14, left: 8, right: 8 }, style: { paddingHorizontal: 10, justifyContent: "center" } },
+        h(RN.Text, { style: { color: t.accent, fontSize: 38, fontWeight: "300" } }, glyph));
+    }
+
+    var dots = list.map(function (p, i) {
+      return h(RN.View, { key: p.id, style: { width: i === idx ? 18 : 6, height: 6, borderRadius: 3, marginHorizontal: 2, marginBottom: 2, backgroundColor: i === idx ? t.accent : t.grey } });
+    });
+    var isUser = !!cur && cur.id.indexOf("user:") === 0;
+
+    var tools = [
+      Btn("Save current look as a preset", function () {
+        var p = savePreset("Preset " + (userPresets().length + 1));
+        if (p) { extVer++; toast("Saved " + p.name); props.onChange(); }
+      })
+    ];
+    if (storage.undoLook) tools.push(Btn("Undo last switch", function () { if (undoPreset()) { extVer++; props.onChange(); toast("Restored"); } }, true));
+    if (cur) tools.push(Btn("Copy this preset to share", function () {
+      try { metro.common.clipboard.setString(exportPreset(cur)); toast("Preset copied"); } catch (e) { toast("Could not copy"); }
+    }, true));
+    if (isUser) {
+      tools.push(h(Field, { key: "pname:" + cur.id + ":" + extVer, label: "Preset name", value: cur.name, onSave: function (v) { if (renamePreset(cur.id, v)) { extVer++; props.onChange(); } } }));
+      tools.push(Btn("Delete this preset", function () { if (deletePreset(cur.id)) { extVer++; toast("Deleted"); props.onChange(); } }, true));
+    }
+    tools.push(h(Field, { key: "pimp:" + extVer, label: "Paste a shared preset to import it", placeholder: "{\"profileforge\":1,...}", value: "", onSave: function (v) {
+      if (!v) return;
+      var r = importPreset(v);
+      if (r.ok) { extVer++; toast("Imported " + r.name); props.onChange(); } else toast(r.error);
+    } }));
+
+    return h.apply(null, [RN.View, null,
+      h(RN.View, { style: { flexDirection: "row", alignItems: "stretch" } },
+        arrow(-1, "\u2039"),
+        h(RN.Animated.View, { style: { flex: 1, opacity: fade, transform: [{ translateX: slide }] } }, h(Preview, { real: props.real })),
+        arrow(1, "\u203A")),
+      h(RN.Text, { style: [st.title, { textAlign: "center" }] }, cur ? cur.name : ""),
+      h.apply(null, [RN.View, { style: { flexDirection: "row", justifyContent: "center", flexWrap: "wrap", marginBottom: 10 } }].concat(dots)),
+      Card("Presets", "Each preset replaces your current setup, so save yours first. Undo brings the last one back.", tools)
+    ]);
+  }
+
+  // Saved banners / avatars / custom badges: tap Use to apply, Remove to delete.
+  function LibraryCard(kind, title, sub, rerender) {
+    var list = libList(kind);
+    var kids = [Btn("Save current " + kind, function () {
+      var ok;
+      if (kind === "badge") ok = libSave("badge", "Badge " + (libList("badge").length + 1), { icon: storage.customBadgeIcon, frames: storage.badgeFrames, desc: storage.customBadgeDesc });
+      else {
+        var url = kind === "banner" ? storage.bannerUrl : storage.avatarUrl;
+        var data = kind === "banner" ? storage.bannerData : storage.avatarData;
+        ok = libSave(kind, (kind === "banner" ? "Banner " : "Avatar ") + (libList(kind).length + 1), url || data);
+      }
+      toast(ok ? "Saved" : "Nothing to save yet (paste a link first)");
+      rerender();
+    }, true)];
+    list.forEach(function (it, i) {
+      kids.push(h(RN.View, { key: kind + i, style: st.row },
+        h(RN.Text, { style: st.rowText, numberOfLines: 1 }, it.name),
+        h(RN.View, { style: { flexDirection: "row" } },
+          h(RN.TouchableOpacity, { onPress: function () { libApply(kind, i); extVer++; rerender(); }, style: st.chipOn }, h(RN.Text, { style: st.chipOnText }, "Use")),
+          h(RN.TouchableOpacity, { onPress: function () { libRemove(kind, i); rerender(); }, style: st.chip }, h(RN.Text, { style: st.chipText }, "Remove")))));
+    });
+    if (!list.length) kids.push(h(RN.Text, { key: kind + "-empty", style: st.sub }, "Nothing saved yet."));
+    return Card(title, sub, kids);
+  }
+
+  function StatsLine() {
+    var s = React.useState(null);
+    React.useEffect(function () { fetchCount(function (n) { s[1](n); }); }, []);
+    if (!STATS_URL || s[0] === null) return null;
+    return h(RN.Text, { style: st.sub }, s[0] + " people use ProfileForge");
+  }
+
   function Settings() {
+    buildStyles();
+    cardSeq = 0;
     var t = React.useState(0);
     var bump = t[1];
     var d = React.useState("");
@@ -1105,8 +1754,8 @@
     function hookSummary() {
       return "avatar " + (hooks.avatar.length ? hooks.avatar.join(", ") : "none found") + " | banner " + (hooks.banner.length ? hooks.banner.join(", ") : "none found") + " | image fallback " + (imageHooked ? "on" : "off");
     }
-    function set(k, v) { storage[k] = v; refresh(); rerender(); }
-    function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } extVer++; refresh(); rerender(); }
+    function set(k, v) { storage[k] = v; if (k === "enabled" || k === "badgeFrames" || k === "badgeFrameMs") startBadgeAnim(); refresh(); rerender(); }
+    function setMany(o) { for (var k in o) { if (has.call(o, k)) storage[k] = o[k]; } startBadgeAnim(); extVer++; refresh(); rerender(); }
     function validHex(v) { return v === "" || hexToInt(v) !== null; }
     function applyNamePreset(g) {
       var eff = Number(storage.nameEffect) || 2;
@@ -1135,7 +1784,7 @@
     var realBadges = rawProfile ? (origOf(rawProfile, "badges") || []) : [];
 
     var head = [];
-    var tabs = { profile: [], badges: [], name: [], media: [], tools: [] };
+    var tabs = { profile: [], badges: [], name: [], media: [], hud: [], tools: [] };
     var cards = head;
 
     cards.push(Card("ProfileForge HUD " + VERSION, "Local only: you see these changes on this phone, other people don't.", [
@@ -1203,6 +1852,9 @@
       h(RN.Text, { style: st.sub }, "Hooks found on this build: " + hookSummary())
     ]));
 
+    cards.push(LibraryCard("banner", "Saved banners", "Keep banners you like and switch between them in one tap.", rerender));
+    cards.push(LibraryCard("avatar", "Saved avatars", "Same for avatars.", rerender));
+
     cards = tabs.name;
     cards.push(Card("Name gradients", "Tap one to color your display name. Three to five colors need Gradient, Prism, Glow or Gummy.", [
       h(Presets, { key: "np2", list: GRADIENTS, onPick: applyNamePreset })
@@ -1250,6 +1902,20 @@
       h(Field, { key: "cbd:" + extVer, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) { set("customBadgeDesc", v); } })
     ]));
 
+    cards.push(Card("Animated badge", "Cycles your custom badge through several icons. While frames are set they replace the single icon above. Only Discord's own badge icons can be used.", [
+      h(Choices, { options: BUILTIN_BADGE_ANIMS.map(function (a) { return [a.id, a.name]; }), value: currentAnimId(), onPick: function (id) { var a = findAnim(id); if (a) { applyBadgeAnim(a); extVer++; rerender(); } } }),
+      Btn("Stop animation", function () { setMany({ badgeFrames: "" }); }, true),
+      h(Field, { key: "bf:" + extVer, label: "Frame icon hashes (comma separated, 2 to 12)", placeholder: "hash1,hash2,...", value: storage.badgeFrames, onSave: function (v) { setMany({ badgeFrames: cleanFrames(v) }); } }),
+      h(Field, { key: "bm:" + extVer, label: "Speed (milliseconds per frame, 600 to 10000)", placeholder: "1200", value: storage.badgeFrameMs, onSave: function (v) { setMany({ badgeFrameMs: cleanValue("badgeFrameMs", v) || 1200 }); } })
+    ]));
+    cards.push(LibraryCard("badge", "Saved custom badges", "Save your custom badge or animation and bring it back later.", rerender));
+
+    cards = tabs.hud;
+    cards.push(Card("HUD theme", "Colors, corners and text style for this screen.", [
+      h(Choices, { options: HUD_THEME_LIST, value: storage.theme, onPick: function (v) { storage.theme = v; rerender(); } }),
+      ToggleRow("Animations (fade-ins, drifting glow, smooth preset switching)", storage.hudAnim, function (v) { storage.hudAnim = v; rerender(); })
+    ]));
+
     cards = tabs.tools;
     var diagKids = [
       Btn("Run diagnostics", function () { setDiag(runDiagnostics()); }, true)
@@ -1261,6 +1927,19 @@
       }));
     }
     cards.push(Card("Diagnostics", "If something doesn't show, run this and send me the output.", diagKids));
+
+    cards.push(Card("Updates" + (STATS_URL ? " and stats" : ""), "New versions are announced here. Nothing is downloaded or run until you update from the Plugins page.", [
+      ToggleRow("Tell me when a new version is out", storage.checkUpdates, function (v) { set("checkUpdates", v); }),
+      Btn("Check for updates now", function () {
+        checkUpdate(function (v, err) { toast(err ? "Could not check for updates" : v ? "Version " + v + " is available" : "You're on the latest version"); });
+      }, true),
+      STATS_URL ? ToggleRow("Count me in the public user total (random anonymous ID and version only, off by default)", storage.telemetry, function (v) { setTelemetry(v); rerender(); }) : null,
+      STATS_URL ? h(StatsLine, { key: "stats" }) : null
+    ]));
+
+    cards.push(Card("Typing indicator", "Restyling the \"is typing\" row needs to know which component your Discord version uses. Scan, then send me the output shown under Diagnostics.", [
+      Btn("Scan for typing components", function () { discoverTyping(); setDiag(runDiagnostics()); }, true)
+    ]));
 
     cards.push(Card("Backup", "Copy your settings, or paste a copy to restore them.", [
       Btn("Copy my settings", function () {
@@ -1278,15 +1957,13 @@
 
     cards.push(Card("Other Nitro features", "Emojis and stickers are separate plugins: Freemoji and FreeStickers. Upload size, HD streaming and server boosts are server-side, so no plugin can change them.", []));
 
-    var tabBar = h(Choices, { options: [["profile", "Profile"], ["badges", "Badges"], ["name", "Name"], ["media", "Media"], ["tools", "Tools"]], value: tab, onPick: function (v) { setTab(v); } });
+    var tabBar = h(Choices, { options: [["profile", "Profile"], ["badges", "Badges"], ["name", "Name"], ["media", "Media"], ["hud", "HUD"], ["tools", "Tools"]], value: tab, onPick: function (v) { setTab(v); } });
 
-    return box(st.root, [h(Preview, { real: realBadges })].concat(head).concat([tabBar]).concat(tabs[tab] || tabs.profile));
-  }
-
-  function withScroll(Inner) {
-    return function Root() {
-      return h(RN.ScrollView, { keyboardShouldPersistTaps: "handled", nestedScrollEnabled: true }, h(Inner, null));
-    };
+    var th = hudTheme();
+    var content = box(st.root, [h(PresetStage, { key: "stage", real: realBadges, onChange: rerender })].concat(head).concat([tabBar]).concat(tabs[tab] || tabs.profile));
+    return h(RN.View, { style: { flex: 1, backgroundColor: th.bg } },
+      h(Blobs, null),
+      h(RN.ScrollView, { keyboardShouldPersistTaps: "handled", nestedScrollEnabled: true }, content));
   }
 
   return {
@@ -1296,6 +1973,6 @@
     onUnload: function () {
       try { uninstall(); } catch (e) { fail("onUnload", e); }
     },
-    settings: withScroll(Settings)
+    settings: Settings
   };
 })()
