@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.4.0";
+  var VERSION = "0.6.0";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -163,7 +163,12 @@
     checkUpdates: true,
     telemetry: false,
     installId: "",
-    lastPing: ""
+    lastPing: "",
+    familyIcons: "{}",
+    bgOn: false,
+    bgUrl: "",
+    bgOpacity: 55,
+    bgDim: true
   };
   for (var xk in EXTRA_DEFAULTS) {
     if (has.call(EXTRA_DEFAULTS, xk) && !has.call(DEFAULTS, xk)) DEFAULTS[xk] = EXTRA_DEFAULTS[xk];
@@ -176,7 +181,7 @@
     "effectId", "effectSkuId", "effectName",
     "decoAsset", "decoSkuId", "decoName",
     "plateAsset", "plateSkuId", "plateLabel", "platePalette", "plateName",
-    "badgeFlags", "badgeIds", "customBadgeIcon", "customBadgeDesc", "hiddenBadges", "badgeFrames", "badgeFrameMs",
+    "badgeFlags", "badgeIds", "customBadgeIcon", "customBadgeDesc", "hiddenBadges", "badgeFrames", "badgeFrameMs", "familyIds", "customBadges",
     "frameSku", "frameName", "frameJson",
     "bannerUrl", "avatarUrl", "bannerData", "avatarData",
     "fakeName", "nameStyleOn", "nameEffect", "nameFont",
@@ -184,9 +189,10 @@
   ];
 
   var HEX32 = /^[0-9a-f]{32}$/;
+  var IMPERSONATION_RE = /discord\s*staff|certified\s*moderator|moderator\s*programs?\s*alumni|partnered\s*server\s*owner|discord\s*partner\b|discord\s*mod(?:erator)?\b/i;
   var DATA_KEY_LIST = ["bannerData", "avatarData"];
   var DATA_KEYS = { bannerData: 1, avatarData: 1 };
-  var URL_KEYS = { bannerUrl: 1, avatarUrl: 1 };
+  var URL_KEYS = { bannerUrl: 1, avatarUrl: 1, bgUrl: 1 };
   var COLOR_KEY = /^(primaryColor|accentColor|nameColor[1-5])$/;
 
   function cleanFrames(s) {
@@ -211,7 +217,24 @@
     if (COLOR_KEY.test(k)) return hexToInt(s) !== null ? s : "";
     if (k === "customBadgeIcon") { s = s.trim().toLowerCase(); return HEX32.test(s) ? s : ""; }
     if (k === "badgeFrames") return cleanFrames(s);
-    if (k === "badgeIds" || k === "hiddenBadges") return s.replace(/[^a-zA-Z0-9_,]/g, "").slice(0, 600);
+    if (k === "badgeIds" || k === "hiddenBadges" || k === "familyIds") return s.replace(/[^a-zA-Z0-9_,]/g, "").slice(0, 600);
+    if (k === "customBadgeDesc" && IMPERSONATION_RE.test(s)) return "";
+    if (k === "customBadges") {
+      var arr;
+      try { arr = JSON.parse(s || "[]"); } catch (_) { arr = []; }
+      if (!Array.isArray(arr)) arr = [];
+      var out2 = [];
+      arr.slice(0, 8).forEach(function (it) {
+        if (!it || typeof it !== "object") return;
+        var icon2 = String(it.icon || "").trim().toLowerCase();
+        var desc2 = String(it.desc || "").trim().slice(0, 60);
+        var tint2 = String(it.tint || "").trim().replace("#", "").toLowerCase();
+        if (!HEX32.test(icon2) || !desc2 || IMPERSONATION_RE.test(desc2)) return;
+        if (!/^[0-9a-f]{6}$/.test(tint2)) tint2 = "";
+        out2.push({ icon: icon2, desc: desc2, tint: tint2 });
+      });
+      return JSON.stringify(out2);
+    }
     if (k === "frameJson") {
       if (!s || s.length > 20000) return "";
       try { JSON.parse(s); return s; } catch (_) { return ""; }
@@ -270,8 +293,128 @@
   var BUILTIN_BADGE_ANIMS = [
     { id: "builtin:tenure", name: "Nitro tenure cycle", frames: framesOf(["premium_tenure_1_month_v2", "premium_tenure_3_month_v2", "premium_tenure_6_month_v2", "premium_tenure_12_month_v2", "premium_tenure_24_month_v2", "premium_tenure_36_month_v2", "premium_tenure_60_month_v2", "premium_tenure_72_month_v2"]) },
     { id: "builtin:boost", name: "Booster ladder", frames: framesOf(["guild_booster_lvl1", "guild_booster_lvl2", "guild_booster_lvl3", "guild_booster_lvl4", "guild_booster_lvl5", "guild_booster_lvl6", "guild_booster_lvl7", "guild_booster_lvl8", "guild_booster_lvl9"]) },
-    { id: "builtin:houses", name: "HypeSquad houses", frames: framesOf(["hypesquad_house_1", "hypesquad_house_2", "hypesquad_house_3"]) }
+    { id: "builtin:houses", name: "HypeSquad houses", frames: framesOf(["hypesquad_house_1", "hypesquad_house_2", "hypesquad_house_3"]) },
+    { id: "builtin:allnitro", name: "All Nitro tiers", frames: framesOf(["premium", "premium_tenure_1_month_v2", "premium_tenure_3_month_v2", "premium_tenure_6_month_v2", "premium_tenure_12_month_v2", "premium_tenure_24_month_v2", "premium_tenure_36_month_v2", "premium_tenure_60_month_v2", "premium_tenure_72_month_v2"]) },
+    { id: "builtin:everything", name: "Everything I've got", frames: framesOf(["quest_completed", "orb_profile_badge", "legacy_username", "hypesquad_house_1", "hypesquad_house_2", "hypesquad_house_3", "active_developer"]) }
   ];
+
+
+  // New badge families Discord has been rolling out: Gifting, Account Age, Streaming, Game Time
+  // and Game Variety. These aren't in the older numeric-flag badge system and I don't have a
+  // confirmed Discord CDN icon hash for any of them, so unlike BADGES above, no icon ships built
+  // in. Pick a tier below, then paste its icon hash if you have one (see the field under the list).
+  var FAMILY_BADGES = [
+    ["gift_patron", "Gifting: Patron (1 gift)", "family_gift"],
+    ["gift_champion", "Gifting: Champion (2 gifts)", "family_gift"],
+    ["gift_luminary", "Gifting: Luminary (3 gifts)", "family_gift"],
+    ["gift_icon", "Gifting: Icon (6 gifts)", "family_gift"],
+    ["gift_hero", "Gifting: Hero (10 gifts)", "family_gift"],
+    ["gift_legend", "Gifting: Legend (20 gifts)", "family_gift"],
+    ["age_seed", "Account age: Seed (1 year)", "family_age"],
+    ["age_sprout", "Account age: Sprout (2 years)", "family_age"],
+    ["age_bud", "Account age: Bud (3 years)", "family_age"],
+    ["age_sapling", "Account age: Sapling (4 years)", "family_age"],
+    ["age_blossom", "Account age: Blossom (5 years)", "family_age"],
+    ["age_redwood", "Account age: Redwood (6 years)", "family_age"],
+    ["age_sequoia", "Account age: Sequoia (7 years)", "family_age"],
+    ["age_bristlecone", "Account age: Bristlecone (8 years)", "family_age"],
+    ["age_stromatolite", "Account age: Stromatolite (9 years)", "family_age"],
+    ["age_primordial", "Account age: Primordial (10+ years)", "family_age"],
+    ["stream_newcomer", "Streaming: Newcomer (1h)", "family_stream"],
+    ["stream_fledgling", "Streaming: Fledgling (5h)", "family_stream"],
+    ["stream_breakout", "Streaming: Breakout (20h)", "family_stream"],
+    ["stream_standout", "Streaming: Standout (75h)", "family_stream"],
+    ["stream_trendsetter", "Streaming: Trendsetter (150h)", "family_stream"],
+    ["stream_headliner", "Streaming: Headliner (300h)", "family_stream"],
+    ["stream_star", "Streaming: Star (500h)", "family_stream"],
+    ["stream_sensation", "Streaming: Sensation (1000h)", "family_stream"],
+    ["stream_visionary", "Streaming: Visionary (2000h)", "family_stream"],
+    ["stream_phenomenon", "Streaming: Phenomenon (5000h+)", "family_stream"],
+    ["gtime_casual", "Game time: Casual (1h)", "family_gtime"],
+    ["gtime_recreational", "Game time: Recreational (5h)", "family_gtime"],
+    ["gtime_dedicated", "Game time: Dedicated (20h)", "family_gtime"],
+    ["gtime_committed", "Game time: Committed (75h)", "family_gtime"],
+    ["gtime_serious", "Game time: Serious (150h)", "family_gtime"],
+    ["gtime_devoted", "Game time: Devoted (300h)", "family_gtime"],
+    ["gtime_seasoned", "Game time: Seasoned (500h)", "family_gtime"],
+    ["gtime_ironclad", "Game time: Ironclad (1000h)", "family_gtime"],
+    ["gtime_unshakeable", "Game time: Unshakeable (2000h)", "family_gtime"],
+    ["gtime_eternal", "Game time: Eternal (5000h+)", "family_gtime"],
+    ["gvar_sampler", "Game variety: Sampler (2 games)", "family_gvar"],
+    ["gvar_dabbler", "Game variety: Dabbler (5 games)", "family_gvar"],
+    ["gvar_enthusiast", "Game variety: Enthusiast (10 games)", "family_gvar"],
+    ["gvar_ranger", "Game variety: Ranger (15 games)", "family_gvar"],
+    ["gvar_explorer", "Game variety: Explorer (20 games)", "family_gvar"],
+    ["gvar_adventurer", "Game variety: Adventurer (30 games)", "family_gvar"],
+    ["gvar_voyager", "Game variety: Voyager (40 games)", "family_gvar"],
+    ["gvar_maverick", "Game variety: Maverick (60 games)", "family_gvar"],
+    ["gvar_polymath", "Game variety: Polymath (80 games)", "family_gvar"],
+    ["gvar_universalist", "Game variety: Universalist (100+ games)", "family_gvar"]
+  ];
+  var FAMILY_GROUPS = [
+    ["family_gift", "Gifting"], ["family_age", "Account age"], ["family_stream", "Streaming"],
+    ["family_gtime", "Game time"], ["family_gvar", "Game variety"]
+  ];
+  var FAMILY_ID_SET = {};
+  FAMILY_BADGES.forEach(function (f) { FAMILY_ID_SET[f[0]] = f; });
+
+  function familyIdSet() {
+    var m = {};
+    String(storage.familyIds || "").split(",").forEach(function (x) { if (x) m[x] = true; });
+    return m;
+  }
+
+  function familyIconMap() {
+    try {
+      var o = JSON.parse(storage.familyIcons || "{}");
+      return o && typeof o === "object" ? o : {};
+    } catch (_) { return {}; }
+  }
+
+  // "id=hash,id=hash" pasted by the user. Unknown ids and bad hashes are dropped silently.
+  function mergeFamilyIcons(text) {
+    var map = familyIconMap();
+    var added = 0;
+    String(text || "").split(",").forEach(function (pair) {
+      var eq = pair.indexOf("=");
+      if (eq < 0) return;
+      var id = pair.slice(0, eq).trim();
+      var hash = pair.slice(eq + 1).trim().toLowerCase();
+      if (FAMILY_ID_SET[id] && HEX32.test(hash)) { map[id] = hash; added++; }
+    });
+    storage.familyIcons = JSON.stringify(map);
+    return added;
+  }
+
+  function customBadgeSlots() {
+    try {
+      var arr = JSON.parse(storage.customBadges || "[]");
+      return Array.isArray(arr) ? arr : [];
+    } catch (_) { return []; }
+  }
+
+  // Returns "ok", "full", "bad-icon", "bad-name" or "blocked" (reads as an official Discord badge).
+  function addCustomBadgeSlot(icon, desc, tint) {
+    var list = customBadgeSlots();
+    if (list.length >= 8) return "full";
+    var i = String(icon || "").trim().toLowerCase();
+    var d = String(desc || "").trim().slice(0, 60);
+    if (!HEX32.test(i)) return "bad-icon";
+    if (!d) return "bad-name";
+    if (IMPERSONATION_RE.test(d)) return "blocked";
+    var t = String(tint || "").trim().replace("#", "").toLowerCase();
+    if (!/^[0-9a-f]{6}$/.test(t)) t = "";
+    storage.customBadges = JSON.stringify(list.concat([{ icon: i, desc: d, tint: t }]));
+    return "ok";
+  }
+
+  function removeCustomBadgeSlot(i) {
+    var list = customBadgeSlots().slice();
+    if (i < 0 || i >= list.length) return false;
+    list.splice(i, 1);
+    storage.customBadges = JSON.stringify(list);
+    return true;
+  }
 
   function findAnim(id) {
     for (var i = 0; i < BUILTIN_BADGE_ANIMS.length; i++) if (BUILTIN_BADGE_ANIMS[i].id === id) return BUILTIN_BADGE_ANIMS[i];
@@ -497,12 +640,21 @@
     var frames = badgeFrameList();
     var icon = frames.length ? frames[badgeTick % frames.length] : String(storage.customBadgeIcon || "").trim().toLowerCase();
     if (HEX32.test(icon)) out.push({ id: "profileforge_custom", description: String(storage.customBadgeDesc || "Custom badge"), icon: icon });
+    var fids = familyIdSet(), fmap = familyIconMap();
+    Object.keys(fids).forEach(function (id) {
+      var meta = FAMILY_ID_SET[id];
+      var hash = fmap[id];
+      if (meta && HEX32.test(hash || "")) out.push({ id: "profileforge_family_" + id, description: meta[1], icon: hash });
+    });
+    customBadgeSlots().forEach(function (slot, i) {
+      if (HEX32.test(slot.icon || "")) out.push({ id: "profileforge_custom_" + i, description: slot.desc, icon: slot.icon, tint: slot.tint || undefined });
+    });
     return out;
   }
 
   function badgesFor(orig) {
     var animated = badgeFrameList().length > 1;
-    var sig = [storage.badgeFlags, storage.badgeIds, storage.customBadgeIcon, storage.customBadgeDesc, storage.hiddenBadges, storage.badgeFrames, animated ? badgeTick : 0].join("|");
+    var sig = [storage.badgeFlags, storage.badgeIds, storage.customBadgeIcon, storage.customBadgeDesc, storage.hiddenBadges, storage.badgeFrames, storage.familyIds, storage.familyIcons, storage.customBadges, animated ? badgeTick : 0].join("|");
     return memo("badges", sig, orig, function () {
       var hidden = hiddenSet();
       var out = (Array.isArray(orig) ? orig : []).filter(function (b) { return !(b && hidden[b.id]); });
@@ -1437,7 +1589,7 @@
       : h(RN.View, { style: st.pvAvatar });
 
     var badgeImgs = badgeList.map(function (b, i) {
-      return h(RN.Image, { key: "b" + i, source: { uri: "https://cdn.discordapp.com/badge-icons/" + b.icon + ".png" }, style: st.pvBadge });
+      return h(RN.Image, { key: "b" + i, source: { uri: "https://cdn.discordapp.com/badge-icons/" + b.icon + ".png" }, style: b.tint ? [st.pvBadge, { tintColor: "#" + b.tint }] : st.pvBadge });
     });
 
     var styleLine = ns ? (labelOf(NAME_EFFECTS, ns.effectId) + " name, " + labelOf(NAME_FONTS, ns.fontId) + " font") : "Normal display name";
@@ -1627,6 +1779,15 @@
     return h(RN.View, { pointerEvents: "none", style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflow: "hidden" } },
       h(RN.Animated.View, { style: { position: "absolute", top: -90, right: -110, width: 320, height: 320, borderRadius: 160, backgroundColor: t.accent, opacity: 0.22, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, 44] }) }] } }),
       h(RN.Animated.View, { style: { position: "absolute", bottom: -120, left: -120, width: 340, height: 340, borderRadius: 170, backgroundColor: t.accent2, opacity: 0.18, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [0, -44] }) }] } }));
+  }
+
+  // Test feature: an arbitrary image/GIF behind the whole settings screen, picked by the user.
+  function CustomBg() {
+    if (!storage.bgOn || !storage.bgUrl) return null;
+    var op = Math.max(10, Math.min(100, Number(storage.bgOpacity) || 55)) / 100;
+    return h(RN.View, { pointerEvents: "none", style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, overflow: "hidden" } },
+      h(RN.Image, { source: { uri: storage.bgUrl }, resizeMode: "cover", style: { width: "100%", height: "100%", opacity: op } }),
+      storage.bgDim ? h(RN.View, { style: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "#000", opacity: 0.35 } }) : null);
   }
 
   // The live preview with arrows on both sides. Tapping an arrow slides the card out, applies the next preset, slides the new one in.
@@ -1899,7 +2060,10 @@
 
     cards.push(Card("Custom badge", "Any badge icon hash (32 characters), for badges not listed above.", [
       h(Field, { key: "cbi:" + extVer, label: "Icon hash", placeholder: "32 hex characters", value: storage.customBadgeIcon, onSave: function (v) { set("customBadgeIcon", v); } }),
-      h(Field, { key: "cbd:" + extVer, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) { set("customBadgeDesc", v); } })
+      h(Field, { key: "cbd:" + extVer, label: "Description", placeholder: "Custom badge", value: storage.customBadgeDesc, onSave: function (v) {
+        if (IMPERSONATION_RE.test(v)) { toast("That name reads as an official Discord badge, so I can't set it. Try something that's clearly your own, like \"ProfileForge Staff\"."); return; }
+        set("customBadgeDesc", v);
+      } })
     ]));
 
     cards.push(Card("Animated badge", "Cycles your custom badge through several icons. While frames are set they replace the single icon above. Only Discord's own badge icons can be used.", [
@@ -1910,10 +2074,65 @@
     ]));
     cards.push(LibraryCard("badge", "Saved custom badges", "Save your custom badge or animation and bring it back later.", rerender));
 
+    var slotsNow = customBadgeSlots();
+    var slotRows = slotsNow.map(function (slot, i) {
+      return h(RN.View, { key: "slot" + i, style: st.row },
+        h(RN.Text, { style: st.rowText, numberOfLines: 1 }, slot.desc + (slot.tint ? "  (#" + slot.tint + ")" : "")),
+        h(RN.TouchableOpacity, { onPress: function () { removeCustomBadgeSlot(i); extVer++; rerender(); }, style: st.chip }, h(RN.Text, { style: st.chipText }, "Remove")));
+    });
+    if (!slotRows.length) slotRows.push(h(RN.Text, { key: "slot-empty", style: st.sub }, "None yet."));
+    slotRows.push(h(RN.Text, { key: "slot-ideas", style: st.sub }, "Name ideas: ProfileForge Staff, ProfileForge OG, ProfileForge Verified, ProfileForge Elite, ProfileForge Legend, ProfileForge Founder."));
+    slotRows.push(h(Field, {
+      key: "slot-add:" + extVer, label: "icon hash|name|color (optional, 6 hex digits)", placeholder: "6bdc42827a38498929a4920da12695d9|ProfileForge Staff|ffcc00",
+      value: "", onSave: function (v) {
+        if (!v) return;
+        var parts = v.split("|");
+        var r = addCustomBadgeSlot(parts[0], parts[1], parts[2]);
+        if (r === "ok") { extVer++; rerender(); toast("Added"); }
+        else if (r === "full") toast("You can have up to 8 of these");
+        else if (r === "bad-icon") toast("That's not a 32-character icon hash");
+        else if (r === "bad-name") toast("Give it a name");
+        else toast("That name reads as an official Discord badge, so I can't add it. Try something that's clearly your own, like \"ProfileForge Staff\".");
+      }
+    }));
+    cards.push(Card("ProfileForge badges", "Your own named badges, using any Discord icon hash you like (see the Custom badge and Animated badge cards above for hashes already on this screen). The color only tints the preview above -- Discord's own badge tray always shows the icon's real colors.", slotRows));
+
+    var fidsNow = familyIdSet();
+    var fmapNow = familyIconMap();
+    function familyOn(id) { return !!fidsNow[id]; }
+    function toggleFamily(id, on) {
+      var m = familyIdSet();
+      if (on) m[id] = true; else delete m[id];
+      set("familyIds", Object.keys(m).join(","));
+    }
+    FAMILY_GROUPS.forEach(function (g) {
+      var list = FAMILY_BADGES.filter(function (f) { return f[2] === g[0]; });
+      var rows = list.map(function (f) {
+        var has_ = !!fmapNow[f[0]];
+        return ToggleRow(f[1] + (has_ ? "" : "  (no icon hash yet)"), familyOn(f[0]), function (v) { toggleFamily(f[0], v); });
+      });
+      cards.push(Card(g[1], "Discord hasn't published icon hashes for these yet, so pick a tier and paste its hash below once you have one; without a hash the badge stays off your profile.", rows));
+    });
+    cards.push(Card("Badge family icon hashes", "Paste one or more as id=hash, comma separated. Example: gift_patron=2ba85e8026a8614b640c2837bcdfe21b", [
+      h(Field, { key: "fim:" + extVer, label: "id=hash,id=hash,...", placeholder: "gift_patron=...", value: "", onSave: function (v) {
+        if (!v) return;
+        var n = mergeFamilyIcons(v);
+        extVer++; rerender();
+        toast(n ? "Saved " + n + " icon" + (n === 1 ? "" : "s") : "No valid id=hash pairs found");
+      } })
+    ]));
+
     cards = tabs.hud;
     cards.push(Card("HUD theme", "Colors, corners and text style for this screen.", [
       h(Choices, { options: HUD_THEME_LIST, value: storage.theme, onPick: function (v) { storage.theme = v; rerender(); } }),
       ToggleRow("Animations (fade-ins, drifting glow, smooth preset switching)", storage.hudAnim, function (v) { storage.hudAnim = v; rerender(); })
+    ]));
+
+    cards.push(Card("Custom animated background (test feature)", "Puts your own GIF or image behind this settings screen. Experimental: it can be slow on some devices and can make text harder to read, which is what the dim option below is for.", [
+      ToggleRow("Use a custom background here", storage.bgOn, function (v) { set("bgOn", v); }),
+      h(Field, { key: "bgu:" + extVer, label: "Image or GIF link", placeholder: "https://...", value: storage.bgUrl, onSave: function (v) { set("bgUrl", /^https?:\/\/[^\s]{1,1900}$/i.test(v) ? v : ""); } }),
+      h(Choices, { options: [["25", "25%"], ["55", "55%"], ["80", "80%"], ["100", "100%"]], value: String(storage.bgOpacity), onPick: function (v) { set("bgOpacity", Number(v)); } }),
+      ToggleRow("Dim background for readability", storage.bgDim, function (v) { set("bgDim", v); })
     ]));
 
     cards = tabs.tools;
@@ -1963,6 +2182,7 @@
     var content = box(st.root, [h(PresetStage, { key: "stage", real: realBadges, onChange: rerender })].concat(head).concat([tabBar]).concat(tabs[tab] || tabs.profile));
     return h(RN.View, { style: { flex: 1, backgroundColor: th.bg } },
       h(Blobs, null),
+      h(CustomBg, null),
       h(RN.ScrollView, { keyboardShouldPersistTaps: "handled", nestedScrollEnabled: true }, content));
   }
 
