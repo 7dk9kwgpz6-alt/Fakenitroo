@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var VERSION = "0.6.0";
+  var VERSION = "0.7.0";
   var V = vendetta;
   var patcher = V.patcher;
   var metro = V.metro;
@@ -386,6 +386,19 @@
     return added;
   }
 
+  // Ready-to-use named badges built from icons already confirmed elsewhere in this file --
+  // no hash-hunting required. "ProfileForge " prefix keeps every name clearly the plugin's own.
+  var CUSTOM_BADGE_PRESETS = [
+    ["ProfileForge Dev", "active_developer", ""],
+    ["ProfileForge Bug Squasher", "bug_hunter_level_2", ""],
+    ["ProfileForge Explorer", "quest_completed", ""],
+    ["ProfileForge Founder", "premium_early_supporter", ""],
+    ["ProfileForge Veteran", "premium_tenure_72_month_v2", ""],
+    ["ProfileForge Booster", "guild_booster_lvl9", ""],
+    ["ProfileForge Icon", "orb_profile_badge", ""],
+    ["ProfileForge Legend", "hypesquad_house_2", ""]
+  ].map(function (p) { return [p[0], iconOf(p[1]), p[2]]; }).filter(function (p) { return !!p[1]; });
+
   function customBadgeSlots() {
     try {
       var arr = JSON.parse(storage.customBadges || "[]");
@@ -678,7 +691,13 @@
     dracula:  { name: "Dracula",    bg: "#282a36", card: "#343746",                ring: "#343746", input: "#21222c",                grey: "#44475a",                border: "#6272a4",                borderTop: "#7b8bc4",                text: "#f8f8f2", sub: "#bfc3d9",                accent: "#bd93f9", accent2: "#ff79c6", onAccent: "#282a36", radius: 8,  mono: true,  prompt: true,  blobs: false },
     gruvbox:  { name: "Gruvbox",    bg: "#282828", card: "#32302f",                ring: "#32302f", input: "#1d2021",                grey: "#504945",                border: "#504945",                borderTop: "#665c54",                text: "#ebdbb2", sub: "#a89984",                accent: "#fabd2f", accent2: "#b8bb26", onAccent: "#282828", radius: 6,  mono: true,  prompt: true,  blobs: false },
     mocha:    { name: "Catppuccin", bg: "#1e1e2e", card: "#313244",                ring: "#313244", input: "#181825",                grey: "#45475a",                border: "#45475a",                borderTop: "#585b70",                text: "#cdd6f4", sub: "#a6adc8",                accent: "#cba6f7", accent2: "#f5c2e7", onAccent: "#1e1e2e", radius: 14, mono: false, prompt: false, blobs: false },
-    classic:  { name: "Classic",    bg: "#313338", card: "#2b2d31",                ring: "#2b2d31", input: "#1e1f22",                grey: "#4e5058",                border: "#2b2d31",                borderTop: "#2b2d31",                text: "#f2f3f5", sub: "#b5bac1",                accent: "#5865f2", accent2: "#eb459e", onAccent: "#ffffff", radius: 12, mono: false, prompt: false, blobs: false }
+    classic:  { name: "Classic",    bg: "#313338", card: "#2b2d31",                ring: "#2b2d31", input: "#1e1f22",                grey: "#4e5058",                border: "#2b2d31",                borderTop: "#2b2d31",                text: "#f2f3f5", sub: "#b5bac1",                accent: "#5865f2", accent2: "#eb459e", onAccent: "#ffffff", radius: 12, mono: false, prompt: false, blobs: false },
+    tokyo:    { name: "Tokyo Night", bg: "#1a1b26", card: "#1f2335",                ring: "#1f2335", input: "#16161e",                grey: "#292e42",                border: "#292e42",                borderTop: "#3b4261",                text: "#c0caf5", sub: "#9aa5ce",                accent: "#7aa2f7", accent2: "#bb9af7", onAccent: "#1a1b26", radius: 14, mono: false, prompt: false, blobs: false },
+    solar:    { name: "Solarized",   bg: "#002b36", card: "#073642",                ring: "#073642", input: "#00252e",                grey: "#0d4552",                border: "#0d4552",                borderTop: "#586e75",                text: "#eee8d5", sub: "#93a1a1",                accent: "#b58900", accent2: "#2aa198", onAccent: "#002b36", radius: 6,  mono: true,  prompt: true,  blobs: false },
+    synth:    { name: "Synthwave",   bg: "#150e28", card: "#241b3d",                ring: "#241b3d", input: "#0f0a1e",                grey: "#3a2a5c",                border: "#ff2ec4",                borderTop: "#ff71ce",                text: "#f7f3ff", sub: "#c9a6ff",                accent: "#ff2ec4", accent2: "#05ffa1", onAccent: "#150e28", radius: 4,  mono: true,  prompt: true,  blobs: true },
+    rosepine: { name: "Rose Pine",   bg: "#191724", card: "#1f1d2e",                ring: "#1f1d2e", input: "#141220",                grey: "#26233a",                border: "#403d52",                borderTop: "#6e6a86",                text: "#e0def4", sub: "#908caa",                accent: "#eb6f92", accent2: "#c4a7e7", onAccent: "#191724", radius: 16, mono: false, prompt: false, blobs: false },
+    forest:   { name: "Forest",      bg: "#141d15", card: "#1c2a1e",                ring: "#1c2a1e", input: "#0f170f",                grey: "#28402b",                border: "#2c4a30",                borderTop: "#3f6b45",                text: "#e3f3e1", sub: "#a3c4a6",                accent: "#6fbf73", accent2: "#c9a86a", onAccent: "#141d15", radius: 10, mono: false, prompt: false, blobs: false },
+    contrast: { name: "High Contrast", bg: "#000000", card: "#000000",              ring: "#000000", input: "#000000",                grey: "#1a1a1a",                border: "#ffffff",                borderTop: "#ffffff",                text: "#ffffff", sub: "#e0e0e0",                accent: "#ffff00", accent2: "#00ffff", onAccent: "#000000", radius: 2,  mono: false, prompt: false, blobs: false }
   };
 
   var HUD_THEME_LIST = Object.keys(HUD_THEMES).map(function (k) { return [k, HUD_THEMES[k].name]; });
@@ -750,26 +769,47 @@
   }
 
   // ---- typing indicator: discovery helper ----
-  // Which component draws "x is typing" differs between Discord builds, so this lists candidates.
+  // Every Discord build (web, desktop, mobile) exposes a Flux store with a getTypingUsers method
+  // -- that part is safe to rely on. Which *component* renders the "x is typing" text differs by
+  // build and isn't guessable, so this scans every loaded module's source for the store call
+  // instead of guessing component names, and reports real candidates instead of just "not found".
 
   function discoverTyping() {
+    var storeLine = "not found";
+    try {
+      var ts = (metro.findByProps && metro.findByProps("getTypingUsers")) ||
+        metro.findByStoreName("UserTypingStore") || metro.findByStoreName("TypingStore");
+      if (ts) storeLine = "found: " + Object.keys(ts).filter(function (k) { return typeof ts[k] === "function"; }).slice(0, 12).join(", ");
+    } catch (e) { fail("typing store lookup", e); }
+    note("Typing store: " + storeLine);
+
     var found = [];
     try {
       eachModule(function (id, ex) {
-        [ex, ex.default].forEach(function (holder) {
-          if (!holder || (typeof holder !== "object" && typeof holder !== "function")) return;
+        if (found.length >= 15) return;
+        var checks = [];
+        if (typeof ex === "function") checks.push(["exports", ex]);
+        if (ex && typeof ex === "object") {
+          Object.keys(ex).forEach(function (k) {
+            if (found.length >= 15) return;
+            var v = ex[k];
+            if (typeof v === "function") checks.push([k, v]);
+          });
+        }
+        checks.forEach(function (pair) {
+          if (found.length >= 15) return;
+          var holder = pair[1];
+          var src = "";
+          try { src = Function.prototype.toString.call(holder); } catch (_) { return; }
+          if (!/getTypingUsers|isTyping|typingUsers/.test(src)) return;
           var nm = "";
           try { nm = String(holder.displayName || holder.name || ""); } catch (_) {}
-          if (nm && /typing/i.test(nm) && found.indexOf(nm) === -1) found.push(nm);
+          found.push(id + ":" + pair[0] + (nm ? " (" + nm + ")" : " (anonymous)"));
         });
       });
     } catch (e) { fail("discoverTyping", e); }
-    try {
-      var ts = metro.findByStoreName("TypingStore");
-      note("TypingStore " + (ts ? "found: " + Object.keys(ts).filter(function (k) { return typeof ts[k] === "function"; }).slice(0, 12).join(", ") : "not found"));
-    } catch (e) { fail("TypingStore", e); }
-    found.slice(0, 20).forEach(function (nm) { note("typing component: " + nm); });
-    toast(found.length ? "Typing candidates: " + found.slice(0, 4).join(", ") : "No typing components found");
+    found.slice(0, 15).forEach(function (c) { note("typing render candidate: " + c); });
+    toast(found.length ? found.length + " possible typing component(s) found -- check Diagnostics" : "No typing components found");
     return found;
   }
 
@@ -1469,8 +1509,10 @@
       pvName: Object.assign({ fontSize: 19, fontWeight: "700", marginTop: 8 }, ff),
       pvDots: { flexDirection: "row", alignItems: "center", marginLeft: 8 },
       pvDot: { width: 10, height: 10, borderRadius: 5, marginLeft: 3 },
-      pvBadges: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
-      pvBadge: { width: 22, height: 22, marginRight: 5, marginBottom: 4 },
+      pvBadges: { flexDirection: "row", flexWrap: "wrap", marginTop: 10, padding: 8, borderRadius: Math.min(t.radius, 14), backgroundColor: t.input, borderColor: t.border, borderWidth: 1 },
+      pvBadgeChip: { width: 30, height: 30, borderRadius: 8, marginRight: 6, marginBottom: 6, backgroundColor: t.card, borderColor: t.border, borderWidth: 1, alignItems: "center", justifyContent: "center", overflow: "hidden" },
+      pvBadge: { width: 20, height: 20 },
+      pvBadgeCount: Object.assign({ color: t.sub, fontSize: 11, marginTop: 6 }, ff),
       pvNote: Object.assign({ color: t.sub, fontSize: 12, lineHeight: 16, marginTop: 2 }, ff),
       swatchRow: { flexDirection: "row", marginBottom: 4, borderRadius: 4, overflow: "hidden" },
       swatch: { width: 14, height: 10 },
@@ -1588,9 +1630,17 @@
       ? h(RN.Image, { source: { uri: avatarUrl }, style: st.pvAvatar })
       : h(RN.View, { style: st.pvAvatar });
 
+    // Each badge sits in its own chip so it reads clearly against any theme, and tapping one
+    // shows its name -- useful once there are a dozen-plus badges stacked together.
     var badgeImgs = badgeList.map(function (b, i) {
-      return h(RN.Image, { key: "b" + i, source: { uri: "https://cdn.discordapp.com/badge-icons/" + b.icon + ".png" }, style: b.tint ? [st.pvBadge, { tintColor: "#" + b.tint }] : st.pvBadge });
+      return h(RN.TouchableOpacity, { key: "b" + i, style: st.pvBadgeChip, onPress: function () { toast(b.description || b.id); } },
+        h(RN.Image, { source: { uri: "https://cdn.discordapp.com/badge-icons/" + b.icon + ".png" }, style: b.tint ? [st.pvBadge, { tintColor: "#" + b.tint }] : st.pvBadge }));
     });
+    var badgeTray = badgeList.length
+      ? h(RN.View, null,
+          h.apply(null, [RN.View, { style: st.pvBadges }].concat(badgeImgs)),
+          h(RN.Text, { style: st.pvBadgeCount }, badgeList.length + " badge" + (badgeList.length === 1 ? "" : "s") + " -- tap one to see its name"))
+      : null;
 
     var styleLine = ns ? (labelOf(NAME_EFFECTS, ns.effectId) + " name, " + labelOf(NAME_FONTS, ns.fontId) + " font") : "Normal display name";
     var lineA = "Effect: " + (on && storage.effectId ? (storage.effectName || storage.effectId) : "none") +
@@ -1604,7 +1654,7 @@
         h(RN.View, { style: st.pvAvatarRow }, avatar),
         nameRow,
         h(RN.Text, { style: st.pvNote }, styleLine),
-        h.apply(null, [RN.View, { style: st.pvBadges }].concat(badgeImgs)),
+        badgeTray,
         h(RN.Text, { style: st.pvNote }, lineA),
         h(RN.Text, { style: st.pvNote }, lineB),
         h(RN.Text, { style: st.pvNote }, on ? "Preview of what you see on this phone." : "Everything is switched off.")
@@ -1908,6 +1958,10 @@
     var tab = tt[0];
     var setTab = tt[1];
     var rs = React.useState(false);
+    var qs = React.useState("");
+    var badgeQuery = qs[0];
+    var setBadgeQuery = qs[1];
+    function matchesQuery(label) { return !badgeQuery || String(label).toLowerCase().indexOf(badgeQuery.toLowerCase()) >= 0; }
     var resetArmed = rs[0];
     var setResetArmed = rs[1];
 
@@ -2036,6 +2090,7 @@
     cards.push(Card("Display name", "Your name and colors on this phone only.", nameKids));
 
     cards = tabs.badges;
+    cards.push(h(Field, { key: "badge-search", label: "Search badges", placeholder: "nitro, boost, streaming...", value: badgeQuery, onLive: function (v) { setBadgeQuery(v); }, onSave: function (v) { setBadgeQuery(v); } }));
     var hiddenNow = hiddenSet();
     function setHidden(id, on) {
       var m = hiddenSet();
@@ -2049,12 +2104,16 @@
     cards.push(Card("Hide your real badges", "Switch a badge on to hide it and keep your profile clean.", hideRows));
 
     BADGE_GROUPS.forEach(function (g) {
-      var list = BADGES.filter(function (b) { return b[5] === g[0]; });
+      var full = BADGES.filter(function (b) { return b[5] === g[0]; });
+      var list = full.filter(function (b) { return matchesQuery(b[0]); });
+      if (badgeQuery && !list.length) return;
       var rows = list.map(function (b) {
         return ToggleRow(b[0], badgeOn(b), function (v) { setBadges([b], v); });
       });
-      rows.push(Btn("Turn all on", function () { setBadges(list, true); }, true));
-      rows.push(Btn("Turn all off", function () { setBadges(list, false); }, true));
+      if (!badgeQuery) {
+        rows.push(Btn("Turn all on", function () { setBadges(full, true); }, true));
+        rows.push(Btn("Turn all off", function () { setBadges(full, false); }, true));
+      }
       cards.push(Card(g[1], g[2], rows));
     });
 
@@ -2081,7 +2140,19 @@
         h(RN.TouchableOpacity, { onPress: function () { removeCustomBadgeSlot(i); extVer++; rerender(); }, style: st.chip }, h(RN.Text, { style: st.chipText }, "Remove")));
     });
     if (!slotRows.length) slotRows.push(h(RN.Text, { key: "slot-empty", style: st.sub }, "None yet."));
-    slotRows.push(h(RN.Text, { key: "slot-ideas", style: st.sub }, "Name ideas: ProfileForge Staff, ProfileForge OG, ProfileForge Verified, ProfileForge Elite, ProfileForge Legend, ProfileForge Founder."));
+    var haveSlotIcons = {};
+    slotsNow.forEach(function (s) { haveSlotIcons[s.icon] = true; });
+    var quickChips = CUSTOM_BADGE_PRESETS.map(function (p) {
+      var already = !!haveSlotIcons[p[1]];
+      return h(RN.TouchableOpacity, { key: "quick:" + p[0], disabled: already, style: already ? st.chipOn : st.chip, onPress: function () {
+        var r = addCustomBadgeSlot(p[1], p[0], p[2]);
+        if (r === "ok") { extVer++; rerender(); toast("Added"); }
+        else if (r === "full") toast("You can have up to 8 of these");
+      } }, h(RN.Text, { style: already ? st.chipOnText : st.chipText }, (already ? "✓ " : "+ ") + p[0]));
+    });
+    slotRows.push(h(RN.Text, { key: "quick-label", style: st.label }, "Quick add (uses icons already confirmed on this screen)"));
+    slotRows.push(h.apply(null, [RN.View, { key: "quick-row", style: st.chips }].concat(quickChips)));
+    slotRows.push(h(RN.Text, { key: "slot-ideas", style: st.sub }, "Or make your own below. More name ideas: ProfileForge Verified, ProfileForge OG, ProfileForge Elite."));
     slotRows.push(h(Field, {
       key: "slot-add:" + extVer, label: "icon hash|name|color (optional, 6 hex digits)", placeholder: "6bdc42827a38498929a4920da12695d9|ProfileForge Staff|ffcc00",
       value: "", onSave: function (v) {
@@ -2106,12 +2177,14 @@
       set("familyIds", Object.keys(m).join(","));
     }
     FAMILY_GROUPS.forEach(function (g) {
-      var list = FAMILY_BADGES.filter(function (f) { return f[2] === g[0]; });
+      var full = FAMILY_BADGES.filter(function (f) { return f[2] === g[0]; });
+      var list = full.filter(function (f) { return matchesQuery(f[1]); });
+      if (badgeQuery && !list.length) return;
       var rows = list.map(function (f) {
         var has_ = !!fmapNow[f[0]];
         return ToggleRow(f[1] + (has_ ? "" : "  (no icon hash yet)"), familyOn(f[0]), function (v) { toggleFamily(f[0], v); });
       });
-      cards.push(Card(g[1], "Discord hasn't published icon hashes for these yet, so pick a tier and paste its hash below once you have one; without a hash the badge stays off your profile.", rows));
+      cards.push(Card(g[1], "Tier names and order are cross-checked against community badge trackers, but Discord hasn't published CDN icon hashes for this family anywhere I could find. Pick a tier, then paste its hash below once you have one -- without a hash the badge stays off your profile rather than showing broken.", rows));
     });
     cards.push(Card("Badge family icon hashes", "Paste one or more as id=hash, comma separated. Example: gift_patron=2ba85e8026a8614b640c2837bcdfe21b", [
       h(Field, { key: "fim:" + extVer, label: "id=hash,id=hash,...", placeholder: "gift_patron=...", value: "", onSave: function (v) {
