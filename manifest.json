@@ -1,7 +1,7 @@
 {
   "name": "ProfileForge",
   "description": "Local profile customizer with a live preview HUD: presets, animated badges, themes, effects, decorations, nameplates, frames, gradient name colors, GIF banner and avatar. Optional anonymous usage counter, off by default.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "authors": [
     {
       "name": "you",
@@ -9,5 +9,5 @@
     }
   ],
   "main": "index.js",
-  "hash": "53c91f52d93512af56e63078464cfb469a57b7cf285629f41fb80792cc7194bd"
+  "hash": "0086ebfba7a8b204d9dc3eb815b92c418a3e7b1fd9d12985a11d3fcfb41b665b"
 }
